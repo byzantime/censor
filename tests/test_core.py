@@ -159,7 +159,9 @@ def test_fstring_first_statement_is_not_a_docstring():
 
 # --- always-preserved comments ---------------------------------------------
 
-SHEBANG_SRC = "#!/usr/bin/env python\n# -*- coding: utf-8 -*-\n# normal\nx = 1  # t\n"
+SHEBANG_SRC = (
+    "#!/usr/bin/env python\n# -*- coding: utf-8 -*-\n# normal\nx = 1  # t\n"
+)
 
 
 @pytest.mark.parametrize("mode", list(Mode))
@@ -327,7 +329,10 @@ def test_cli_non_utf8_roundtrip(tmp_path):
     raw = "# -*- coding: latin-1 -*-\n# gone\ns = 'caf\xe9'\n".encode("latin-1")
     f.write_bytes(raw)
     assert main([str(f)]) == 0
-    assert f.read_bytes() == "# -*- coding: latin-1 -*-\ns = 'caf\xe9'\n".encode("latin-1")
+    assert (
+        f.read_bytes()
+        == "# -*- coding: latin-1 -*-\ns = 'caf\xe9'\n".encode("latin-1")
+    )
 
 
 def test_cli_utf8_bom_preserved(tmp_path):
@@ -345,7 +350,9 @@ def test_cli_lone_cr_file_skipped(tmp_path):
     assert f.read_bytes() == raw
 
 
-def test_cli_verification_failure_leaves_file_untouched(tmp_path, monkeypatch, capsys):
+def test_cli_verification_failure_leaves_file_untouched(
+    tmp_path, monkeypatch, capsys
+):
     f = tmp_path / "a.py"
     src = "# gone\nx = 1\n"
     f.write_text(src)

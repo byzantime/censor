@@ -31,11 +31,11 @@ packages = ["src/censor"]
 testpaths = ["tests"]
 
 [tool.black]
-line-length = 150
+line-length = 80
 target-version = ["py39"]
 
 [tool.ruff]
-line-length = 150
+line-length = 80
 target-version = "py39"
 
 [tool.ruff.lint]

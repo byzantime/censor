@@ -54,14 +54,21 @@ DEFAULT_KEEPS: "Pattern[str]" = re.compile(
 # PEP 263 encoding declaration; only honoured on lines 1-2.
 _CODING = re.compile(r"^#.*?coding[:=][ \t]*[-_.a-zA-Z0-9]+")
 
-_DOCSTRING_OWNERS = (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
+_DOCSTRING_OWNERS = (
+    ast.Module,
+    ast.ClassDef,
+    ast.FunctionDef,
+    ast.AsyncFunctionDef,
+)
 
 
 def _physical_lines(src: str) -> List[str]:
     return io.StringIO(src).readlines()
 
 
-def _kept(tok: tokenize.TokenInfo, keep: "Optional[Pattern[str]]", default_keeps: bool) -> bool:
+def _kept(
+    tok: tokenize.TokenInfo, keep: "Optional[Pattern[str]]", default_keeps: bool
+) -> bool:
     text = tok.string
     row = tok.start[0]
     if row == 1 and text.startswith("#!"):
@@ -73,7 +80,9 @@ def _kept(tok: tokenize.TokenInfo, keep: "Optional[Pattern[str]]", default_keeps
     return keep is not None and keep.search(text) is not None
 
 
-def _deletable_docstrings(lines: List[str], tree: ast.Module) -> "List[Tuple[ast.stmt, ast.Expr, bool]]":
+def _deletable_docstrings(
+    lines: List[str], tree: ast.Module
+) -> "List[Tuple[ast.stmt, ast.Expr, bool]]":
     """Docstrings whose physical lines contain nothing but the docstring.
 
     Returns ``(owner, docstring_stmt, sole)`` triples; *sole* means the
@@ -90,7 +99,11 @@ def _deletable_docstrings(lines: List[str], tree: ast.Module) -> "List[Tuple[ast
         if not body:
             continue
         doc = body[0]
-        if not (isinstance(doc, ast.Expr) and isinstance(doc.value, ast.Constant) and isinstance(doc.value.value, str)):
+        if not (
+            isinstance(doc, ast.Expr)
+            and isinstance(doc.value, ast.Constant)
+            and isinstance(doc.value.value, str)
+        ):
             continue
         if lines[doc.lineno - 1][: doc.col_offset].strip():
             continue
@@ -142,7 +155,11 @@ def strip_source(
                 replace[last] = indent + "pass" + ending
     if not delete and not replace:
         return src
-    return "".join(replace[i] if i in replace else line for i, line in enumerate(lines) if i in replace or i not in delete)
+    return "".join(
+        replace[i] if i in replace else line
+        for i, line in enumerate(lines)
+        if i in replace or i not in delete
+    )
 
 
 _INSIGNIFICANT = frozenset({tokenize.COMMENT, tokenize.NL})
@@ -155,7 +172,9 @@ def _significant_tokens(src: str) -> "List[Tuple[int, str]]":
             continue
         # A NEWLINE's own text carries no meaning (the tokenizer synthesises
         # an empty one at EOF); its presence and position still must match.
-        sig.append((tok.type, "" if tok.type == tokenize.NEWLINE else tok.string))
+        sig.append(
+            (tok.type, "" if tok.type == tokenize.NEWLINE else tok.string)
+        )
     return sig
 
 
@@ -171,7 +190,9 @@ def verify(src: str, stripped: str, mode: Mode = Mode.OWN_LINE) -> bool:
         mode = Mode(mode)
     if mode is Mode.DOCSTRINGS:
         tree = ast.parse(src)
-        for owner, doc, sole in _deletable_docstrings(_physical_lines(src), tree):
+        for owner, doc, sole in _deletable_docstrings(
+            _physical_lines(src), tree
+        ):
             owner.body.remove(doc)
             if sole:
                 owner.body.append(ast.Pass())
