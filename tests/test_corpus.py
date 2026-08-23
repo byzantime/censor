@@ -10,9 +10,18 @@ import tokenize
 
 import pytest
 
-from censor import Mode, strip_source, verify
+from censor import Mode
+from censor import strip_source
+from censor import verify
 
-_SKIP_PARTS = {"test", "tests", "idle_test", "idlelib", "site-packages", "lib2to3"}
+_SKIP_PARTS = {
+    "test",
+    "tests",
+    "idle_test",
+    "idlelib",
+    "site-packages",
+    "lib2to3",
+}
 
 
 def _corpus():
