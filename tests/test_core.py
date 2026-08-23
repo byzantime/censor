@@ -3,8 +3,10 @@ import textwrap
 
 import pytest
 
-from censor import Mode, strip_source, verify
+from censor import Mode
 from censor import _cli
+from censor import strip_source
+from censor import verify
 from censor._cli import main
 
 
@@ -16,21 +18,20 @@ def strip(src, mode=Mode.OWN_LINE, **kw):
 
 # --- own-line mode (the default) -------------------------------------------
 
+
 def test_own_line_deleted_trailing_kept():
     src = "# banner\nx = 1  # trailing\n    # indented\ny = 2\n"
     assert strip(src) == "x = 1  # trailing\ny = 2\n"
 
 
 def test_own_line_inside_multiline_expression():
-    src = textwrap.dedent(
-        """\
+    src = textwrap.dedent("""\
         x = [
             1,  # one
             # own-line inside brackets
             2,
         ]
-        """
-    )
+        """)
     expected = "x = [\n    1,  # one\n    2,\n]\n"
     assert strip(src) == expected
 
@@ -62,6 +63,7 @@ def test_form_feed_does_not_desync_lines():
 
 # --- all mode ---------------------------------------------------------------
 
+
 def test_all_removes_trailing_comment_and_padding():
     src = "x = 1    # trailing\n# own\ny = 2\n"
     assert strip(src, Mode.ALL) == "x = 1\ny = 2\n"
@@ -82,9 +84,9 @@ def test_all_comment_after_open_bracket():
 
 # --- docstrings mode --------------------------------------------------------
 
+
 def test_docstrings_removed_everywhere():
-    src = textwrap.dedent(
-        '''\
+    src = textwrap.dedent('''\
         """Module docstring."""
         # comment
         import os
@@ -103,8 +105,7 @@ def test_docstrings_removed_everywhere():
 
         async def f():
             """Async docstring."""
-        '''
-    )
+        ''')
     out = strip(src, Mode.DOCSTRINGS)
     assert '"""' not in out
     assert "# comment" not in out
@@ -170,9 +171,19 @@ def test_shebang_and_coding_survive_every_mode(mode):
 
 @pytest.mark.parametrize(
     "pragma",
-    ["# noqa", "# noqa: E501", "#noqa", "# NOQA", "# type: ignore", "# fmt: off",
-     "# isort:skip", "# ruff: noqa", "# mypy: disallow-untyped-defs",
-     "# pyright: ignore[reportGeneralTypeIssues]", "# pragma: no cover"],
+    [
+        "# noqa",
+        "# noqa: E501",
+        "#noqa",
+        "# NOQA",
+        "# type: ignore",
+        "# fmt: off",
+        "# isort:skip",
+        "# ruff: noqa",
+        "# mypy: disallow-untyped-defs",
+        "# pyright: ignore[reportGeneralTypeIssues]",
+        "# pragma: no cover",
+    ],
 )
 def test_default_pragmas_kept_even_in_all_mode(pragma):
     src = "x = 1  %s\n" % pragma
@@ -195,6 +206,7 @@ def test_keep_regex():
 
 
 # --- verification gate ------------------------------------------------------
+
 
 def test_verify_rejects_code_deletion():
     src = "x = 1\ny = 2\n"
@@ -219,6 +231,7 @@ def test_idempotent():
 
 
 # --- CLI --------------------------------------------------------------------
+
 
 def test_cli_default_strips_in_place(tmp_path, capsys):
     f = tmp_path / "a.py"

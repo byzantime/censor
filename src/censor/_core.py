@@ -24,7 +24,12 @@ import enum
 import io
 import re
 import tokenize
-from typing import Dict, List, Optional, Pattern, Set, Tuple
+from typing import Dict
+from typing import List
+from typing import Optional
+from typing import Pattern
+from typing import Set
+from typing import Tuple
 
 __all__ = ["Mode", "strip_source", "verify", "DEFAULT_KEEPS"]
 
@@ -68,9 +73,7 @@ def _kept(tok: tokenize.TokenInfo, keep: "Optional[Pattern[str]]", default_keeps
     return keep is not None and keep.search(text) is not None
 
 
-def _deletable_docstrings(
-    lines: List[str], tree: ast.Module
-) -> "List[Tuple[ast.stmt, ast.Expr, bool]]":
+def _deletable_docstrings(lines: List[str], tree: ast.Module) -> "List[Tuple[ast.stmt, ast.Expr, bool]]":
     """Docstrings whose physical lines contain nothing but the docstring.
 
     Returns ``(owner, docstring_stmt, sole)`` triples; *sole* means the
@@ -87,11 +90,7 @@ def _deletable_docstrings(
         if not body:
             continue
         doc = body[0]
-        if not (
-            isinstance(doc, ast.Expr)
-            and isinstance(doc.value, ast.Constant)
-            and isinstance(doc.value.value, str)
-        ):
+        if not (isinstance(doc, ast.Expr) and isinstance(doc.value, ast.Constant) and isinstance(doc.value.value, str)):
             continue
         if lines[doc.lineno - 1][: doc.col_offset].strip():
             continue
@@ -143,11 +142,7 @@ def strip_source(
                 replace[last] = indent + "pass" + ending
     if not delete and not replace:
         return src
-    return "".join(
-        replace[i] if i in replace else line
-        for i, line in enumerate(lines)
-        if i in replace or i not in delete
-    )
+    return "".join(replace[i] if i in replace else line for i, line in enumerate(lines) if i in replace or i not in delete)
 
 
 _INSIGNIFICANT = frozenset({tokenize.COMMENT, tokenize.NL})

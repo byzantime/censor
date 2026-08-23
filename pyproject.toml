@@ -22,10 +22,63 @@ classifiers = [
 censor = "censor._cli:main"
 
 [dependency-groups]
-dev = ["pytest>=7"]
+dev = ["pytest>=7", "black", "ruff>=0.4"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/censor"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.black]
+line-length = 150
+target-version = ["py39"]
+
+[tool.ruff]
+line-length = 150
+target-version = "py39"
+
+[tool.ruff.lint]
+# E/F/I/C90 are the baseline. The rest are named rule-by-rule rather than by
+# family: each one below was measured against this codebase, every finding it
+# had was fixed, and it earns its place by catching a way agent-written code
+# goes wrong that review reliably misses.
+select = [
+    "E",
+    "F",
+    "I",
+    "C90",
+    # Detached asyncio task nobody holds a reference to. The garbage collector
+    # may cancel it mid-flight; this is the same bug class as the post-run write
+    # race, and it is invisible until a task silently doesn't happen.
+    "RUF006",
+    # Closure over a loop variable. Reads correct, runs with the last
+    # iteration's value.
+    "B023",
+    # try/except/pass with no logging, i.e. precisely where a failure needs to
+    # be findable.
+    "S110",
+    # Re-raise inside except without `from`, which drops the original traceback.
+    "B904",
+    # Module-level global rebound at runtime. In a suite that shares one process
+    # across the whole session, this is where cross-test leaks come from.
+    "PLW0603",
+    # Mutable class attribute with no ClassVar: shared state that reads as a
+    # per-instance default.
+    "RUF012",
+    # zip() with no strict=, so a length mismatch silently truncates.
+    "B905",
+    # noqa that no longer suppresses anything — a stale claim about the code.
+    "RUF100",
+    # try/except/pass that contextlib.suppress states more directly.
+    "SIM105",
+]
+ignore = ["F402"]
+dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.ruff.lint.isort]
+known-first-party = ["censor"]
+force-single-line = true

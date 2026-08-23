@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import difflib
 import functools
 import io
@@ -14,14 +15,21 @@ import tokenize
 from concurrent.futures import ProcessPoolExecutor
 from fnmatch import fnmatch
 from pathlib import Path
-from typing import Iterable, Iterator, List, NamedTuple, Optional, Sequence, Tuple
+from typing import Iterable
+from typing import Iterator
+from typing import List
+from typing import NamedTuple
+from typing import Optional
+from typing import Sequence
+from typing import Tuple
 
-from censor._core import Mode, strip_source, verify
+from censor._core import Mode
+from censor._core import strip_source
+from censor._core import verify
 
 #: Directories never descended into (in addition to ``--exclude`` globs).
 SKIP_DIRS = frozenset(
-    {".git", ".venv", "venv", "__pycache__", "build", "dist",
-     ".tox", ".nox", ".eggs", ".mypy_cache", ".pytest_cache", ".ruff_cache"}
+    {".git", ".venv", "venv", "__pycache__", "build", "dist", ".tox", ".nox", ".eggs", ".mypy_cache", ".pytest_cache", ".ruff_cache"}
 )
 
 #: Below this many files the process pool costs more than it saves.
@@ -44,21 +52,14 @@ def _excluded(path: str, name: str, excludes: "Sequence[str]") -> bool:
     return any(fnmatch(path, g) or fnmatch(name, g) for g in excludes)
 
 
-def _discover(
-    paths: "Iterable[Path]", excludes: "Sequence[str]"
-) -> "Tuple[List[str], List[str]]":
+def _discover(paths: "Iterable[Path]", excludes: "Sequence[str]") -> "Tuple[List[str], List[str]]":
     """Return (python files, missing arguments), both sorted and deduplicated."""
     files = set()
     missing = []
     for root in paths:
         if root.is_dir():
             for dirpath, dirnames, filenames in os.walk(root):
-                dirnames[:] = sorted(
-                    d
-                    for d in dirnames
-                    if d not in SKIP_DIRS
-                    and not _excluded(os.path.join(dirpath, d), d, excludes)
-                )
+                dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS and not _excluded(os.path.join(dirpath, d), d, excludes))
                 for name in filenames:
                     full = os.path.join(dirpath, name)
                     if name.endswith(".py") and not _excluded(full, name, excludes):
@@ -77,16 +78,12 @@ def _atomic_write(path: str, data: bytes) -> None:
     try:
         with os.fdopen(fd, "wb") as fh:
             fh.write(data)
-        try:
+        with contextlib.suppress(OSError):
             os.chmod(tmp, os.stat(path).st_mode)
-        except OSError:
-            pass
         os.replace(tmp, path)
     except BaseException:
-        try:
+        with contextlib.suppress(OSError):
             os.unlink(tmp)
-        except OSError:
-            pass
         raise
 
 
@@ -98,13 +95,39 @@ class _Config(NamedTuple):
     want_diff: bool
 
 
+def _read_source(path: str) -> "Tuple[str, str]":
+    """Read *path* and decode it per its PEP 263 coding declaration.
+
+    Raises OSError/SyntaxError/UnicodeDecodeError/LookupError on failure.
+    """
+    raw = Path(path).read_bytes()
+    encoding, _ = tokenize.detect_encoding(io.BytesIO(raw).readline)
+    return raw.decode(encoding), encoding
+
+
+def _verified(src: str, stripped: str, mode: Mode) -> bool:
+    try:
+        return bool(verify(src, stripped, mode))
+    except Exception:
+        return False
+
+
+def _diff(path: str, src: str, stripped: str) -> str:
+    return "".join(
+        difflib.unified_diff(
+            src.splitlines(keepends=True),
+            stripped.splitlines(keepends=True),
+            fromfile=path,
+            tofile=path,
+        )
+    )
+
+
 def _process_one(cfg: _Config, path: str) -> Result:
     # Rewrite symlinks' targets rather than replacing the links themselves.
     path = os.path.realpath(path)
     try:
-        raw = Path(path).read_bytes()
-        encoding, _ = tokenize.detect_encoding(io.BytesIO(raw).readline)
-        src = raw.decode(encoding)
+        src, encoding = _read_source(path)
     except (OSError, SyntaxError, UnicodeDecodeError, LookupError) as exc:
         return Result(path, SKIPPED, "cannot read: %s" % exc)
     if src.count("\r") != src.count("\r\n"):
@@ -120,22 +143,11 @@ def _process_one(cfg: _Config, path: str) -> Result:
         return Result(path, FAILED, "internal error: %r" % exc)
     if stripped == src:
         return Result(path, UNCHANGED)
-    try:
-        ok = verify(src, stripped, Mode(cfg.mode))
-    except Exception:
-        ok = False
-    if not ok:
+    if not _verified(src, stripped, Mode(cfg.mode)):
         return Result(path, FAILED, "verification failed; file left untouched")
     diff = None
     if cfg.want_diff:
-        diff = "".join(
-            difflib.unified_diff(
-                src.splitlines(keepends=True),
-                stripped.splitlines(keepends=True),
-                fromfile=path,
-                tofile=path,
-            )
-        )
+        diff = _diff(path, src, stripped)
     if cfg.write:
         try:
             _atomic_write(path, stripped.encode(encoding))
@@ -166,33 +178,35 @@ def _build_parser() -> argparse.ArgumentParser:
         "provably preserves the program; anything that cannot be proven safe "
         "is left untouched and reported.",
     )
-    parser.add_argument("paths", nargs="+", type=Path, metavar="PATH",
-                        help="files or directories to strip")
+    parser.add_argument("paths", nargs="+", type=Path, metavar="PATH", help="files or directories to strip")
     group = parser.add_mutually_exclusive_group()
-    group.add_argument("--docstrings", dest="mode", action="store_const",
-                       const=Mode.DOCSTRINGS,
-                       help="also delete module/class/function docstrings")
-    group.add_argument("--all", dest="mode", action="store_const", const=Mode.ALL,
-                       help="delete every comment, including trailing ones")
+    group.add_argument("--docstrings", dest="mode", action="store_const", const=Mode.DOCSTRINGS, help="also delete module/class/function docstrings")
+    group.add_argument("--all", dest="mode", action="store_const", const=Mode.ALL, help="delete every comment, including trailing ones")
     parser.set_defaults(mode=Mode.OWN_LINE)
-    parser.add_argument("--diff", action="store_true",
-                        help="print unified diffs instead of writing")
-    parser.add_argument("--check", action="store_true",
-                        help="write nothing; exit 1 if any file would change")
-    parser.add_argument("--keep", metavar="REGEX",
-                        help="also keep comments matching this regex")
-    parser.add_argument("--no-default-keeps", action="store_true",
-                        help="do not keep # noqa / # type: / # pragma: "
-                        "and friends (shebang and coding lines always survive)")
-    parser.add_argument("--exclude", action="append", default=[], metavar="GLOB",
-                        help="skip paths matching this glob (repeatable)")
-    parser.add_argument("--jobs", type=int, metavar="N",
-                        help="worker processes (default: number of CPUs)")
+    parser.add_argument("--diff", action="store_true", help="print unified diffs instead of writing")
+    parser.add_argument("--check", action="store_true", help="write nothing; exit 1 if any file would change")
+    parser.add_argument("--keep", metavar="REGEX", help="also keep comments matching this regex")
+    parser.add_argument(
+        "--no-default-keeps",
+        action="store_true",
+        help="do not keep # noqa / # type: / # pragma: " "and friends (shebang and coding lines always survive)",
+    )
+    parser.add_argument("--exclude", action="append", default=[], metavar="GLOB", help="skip paths matching this glob (repeatable)")
+    parser.add_argument("--jobs", type=int, metavar="N", help="worker processes (default: number of CPUs)")
     from censor import __version__
 
-    parser.add_argument("--version", action="version",
-                        version="%(prog)s " + __version__)
+    parser.add_argument("--version", action="version", version="%(prog)s " + __version__)
     return parser
+
+
+def _report(result: Result, ns: argparse.Namespace, counts: "dict") -> None:
+    counts[result.status] += 1
+    if result.diff:
+        sys.stdout.write(result.diff)
+    if result.status == CHANGED and ns.check and not ns.diff:
+        print(result.path)
+    if result.message:
+        print("censor: %s: %s" % (result.path, result.message), file=sys.stderr)
 
 
 def main(argv: "Optional[Sequence[str]]" = None) -> int:
@@ -216,19 +230,12 @@ def main(argv: "Optional[Sequence[str]]" = None) -> int:
 
     counts = {UNCHANGED: 0, CHANGED: 0, SKIPPED: 0, FAILED: 0}
     for result in _run(cfg, files, jobs):
-        counts[result.status] += 1
-        if result.diff:
-            sys.stdout.write(result.diff)
-        if result.status == CHANGED and ns.check and not ns.diff:
-            print(result.path)
-        if result.message:
-            print("censor: %s: %s" % (result.path, result.message), file=sys.stderr)
+        _report(result, ns, counts)
 
     verb = "would change" if ns.check or ns.diff else "changed"
     print(
         "censor: %d file%s: %d %s, %d unchanged, %d skipped, %d failed"
-        % (len(files), "s" if len(files) != 1 else "", counts[CHANGED], verb,
-           counts[UNCHANGED], counts[SKIPPED], counts[FAILED]),
+        % (len(files), "s" if len(files) != 1 else "", counts[CHANGED], verb, counts[UNCHANGED], counts[SKIPPED], counts[FAILED]),
         file=sys.stderr,
     )
     if counts[FAILED] or counts[SKIPPED] or missing:

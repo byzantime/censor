@@ -8,7 +8,10 @@ Library use::
     assert verify(src, stripped, Mode.OWN_LINE)
 """
 
-from censor._core import DEFAULT_KEEPS, Mode, strip_source, verify
+from censor._core import DEFAULT_KEEPS
+from censor._core import Mode
+from censor._core import strip_source
+from censor._core import verify
 
 __version__ = "0.1.0"
 
