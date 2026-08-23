@@ -99,6 +99,8 @@ class _Config(NamedTuple):
 
 
 def _process_one(cfg: _Config, path: str) -> Result:
+    # Rewrite symlinks' targets rather than replacing the links themselves.
+    path = os.path.realpath(path)
     try:
         raw = Path(path).read_bytes()
         encoding, _ = tokenize.detect_encoding(io.BytesIO(raw).readline)

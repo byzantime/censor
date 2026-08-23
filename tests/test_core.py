@@ -235,6 +235,16 @@ def test_cli_all_mode(tmp_path):
     assert f.read_text() == "x = 1\n"
 
 
+def test_cli_symlink_target_is_rewritten_not_replaced(tmp_path):
+    target = tmp_path / "a.py"
+    target.write_text("# gone\nx = 1\n")
+    link = tmp_path / "link.py"
+    link.symlink_to(target)
+    assert main([str(link)]) == 0
+    assert link.is_symlink()
+    assert target.read_text() == "x = 1\n"
+
+
 def test_cli_check_does_not_write(tmp_path, capsys):
     f = tmp_path / "a.py"
     src = "# gone\nx = 1\n"
