@@ -526,3 +526,91 @@ def test_cli_check_rerun_command_drops_check_and_diff(tmp_path, capsys):
     err = capsys.readouterr().err
     assert "--check" not in err.splitlines()[1]
     assert "--diff" not in err.splitlines()[1]
+
+
+# --- docstring length cap ---------------------------------------------------
+
+
+def dv(src, n):
+    from censor import docstring_violations
+
+    return docstring_violations(src, n)
+
+
+def test_doc_counting_one_liners():
+    assert not dv('def f():\n    """one"""\n', 1)
+    v = dv('def f():\n    """one""" \n', 0)
+    assert v == [("f", 2, 1)]
+    # bare-quote block: quote-only first/last lines don't count
+    src = 'def f():\n    """\n    one\n    """\n'
+    assert dv(src, 0) == [("f", 2, 1)]
+
+
+def test_doc_interior_blank_lines_count():
+    src = 'def f():\n    """a\n\n    b"""\n'
+    assert dv(src, 2) == [("f", 2, 3)]
+    assert not dv(src, 3)
+
+
+def test_doc_empty_docstring_is_zero_lines():
+    assert not dv('def f():\n    """"""\n', 0)
+
+
+def test_doc_owners_and_names():
+    src = textwrap.dedent('''\
+        """module doc
+        line two"""
+
+        class C:
+            """c doc
+            more"""
+
+            def m(self):
+                """m doc
+                more"""
+
+            async def am(self):
+                pass
+        ''')
+    got = {(v.name, v.lineno) for v in dv(src, 1)}
+    assert got == {("module", 1), ("C", 5), ("m", 9)}
+
+
+def test_doc_same_line_def_counts():
+    src = 'def f(): "doc"\n'
+    assert dv(src, 0) == [("f", 1, 1)]
+
+
+def test_doc_no_violation_at_exact_limit():
+    src = 'def f():\n    """one\n    two\n    three"""\n'
+    assert not dv(src, 3)
+    assert len(dv(src, 2)) == 1
+
+
+def test_cli_max_doc_lines_composes_with_default_mode(tmp_path, capsys):
+    f = tmp_path / "a.py"
+    f.write_text('# gone\ndef f():\n    """a\n    b"""\n')
+    assert main([str(f)]) == 0
+    # default mode stripped the comment; docstrings are untouched there
+    assert f.read_text() == 'def f():\n    """a\n    b"""\n'
+    out, err = capsys.readouterr()
+    assert "violations" not in err
+
+
+def test_cli_max_doc_lines_reports_and_exits_1(tmp_path, capsys):
+    f = tmp_path / "a.py"
+    f.write_text('def f():\n    """a\n    b\n    c"""\n')
+    rc = main(["--max-doc-lines", "2", str(f)])
+    assert rc == 1
+    out, err = capsys.readouterr()
+    assert "%s:2: docstring of 'f' has 3 lines (limit 2)" % f in out
+    assert "1 docstring violations" in err
+    # nothing was rewritten
+    assert f.read_text() == 'def f():\n    """a\n    b\n    c"""\n'
+    # under the limit: exit 0
+    assert main(["--max-doc-lines", "5", str(f)]) == 0
+
+
+def test_cli_max_doc_lines_invalid_value_rejected(capsys):
+    with pytest.raises(SystemExit):
+        main(["--max-doc-lines", "0", "."])
