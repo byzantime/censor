@@ -26,12 +26,20 @@ import re
 import tokenize
 from typing import Dict
 from typing import List
+from typing import NamedTuple
 from typing import Optional
 from typing import Pattern
 from typing import Set
 from typing import Tuple
 
-__all__ = ["Mode", "strip_source", "verify", "DEFAULT_KEEPS"]
+__all__ = [
+    "Mode",
+    "strip_source",
+    "verify",
+    "DEFAULT_KEEPS",
+    "DocstringViolation",
+    "docstring_violations",
+]
 
 
 class Mode(enum.Enum):
@@ -160,6 +168,64 @@ def strip_source(
         for i, line in enumerate(lines)
         if i in replace or i not in delete
     )
+
+
+class DocstringViolation(NamedTuple):
+    """A docstring whose line count exceeds a configured cap."""
+
+    #: ``"module"`` for the module docstring, else the owner's name.
+    name: str
+    #: 1-based source line where the docstring statement starts.
+    lineno: int
+    #: Number of content lines in the docstring's text.
+    lines: int
+
+
+def _docstring_stmt(
+    node: "ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef",
+) -> "Optional[Tuple[ast.Expr, ast.Constant]]":
+    """The docstring of *node* as ``(statement, string constant)``, or None.
+
+    Same detection rule as :func:`_deletable_docstrings` but without any
+    layout restriction — this is a read-only check, so docstrings that share
+    their line with other code count too.
+    """
+    body = node.body
+    if not body:
+        return None
+    doc = body[0]
+    if not (
+        isinstance(doc, ast.Expr)
+        and isinstance(doc.value, ast.Constant)
+        and isinstance(doc.value.value, str)
+    ):
+        return None
+    return doc, doc.value
+
+
+def docstring_violations(src: str, max_lines: int) -> List[DocstringViolation]:
+    """Docstrings in *src* whose content exceeds *max_lines* lines.
+
+    The count covers the docstring's own text with the quotes stripped:
+    interior blank lines count, the quote-only opening and closing lines do
+    not, so both ``'''one-liner'''`` and its bare-quote block equivalent are
+    one line.  Never rewrites anything; raises :class:`SyntaxError` when
+    *src* does not parse.
+    """
+    tree = ast.parse(src)
+    violations = []
+    for node in ast.walk(tree):
+        if not isinstance(node, _DOCSTRING_OWNERS):
+            continue
+        found = _docstring_stmt(node)
+        if found is None:
+            continue
+        doc, const = found
+        n = len(const.value.strip().splitlines())
+        if n > max_lines:
+            name = "module" if isinstance(node, ast.Module) else node.name
+            violations.append(DocstringViolation(name, doc.lineno, n))
+    return violations
 
 
 _INSIGNIFICANT = frozenset({tokenize.COMMENT, tokenize.NL})
