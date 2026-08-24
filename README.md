@@ -9,7 +9,7 @@ $ censor --check src/                 # CI gate: exit 1 if anything would change
 $ censor --diff --docstrings pkg/     # preview without writing
 ```
 
-Zero runtime dependencies, pure stdlib, Python 3.9+.
+Zero runtime dependencies, pure stdlib, Python 3.11+.
 
 ## The three modes
 
@@ -72,11 +72,51 @@ censor PATH... [--docstrings | --all] [options]
   --check               write nothing; exit 1 if any file would change
   --max-doc-lines N     report docstrings longer than N content lines; exit 1
                         if any (composes with every mode)
-  --keep REGEX          also keep comments matching REGEX
-  --no-default-keeps    drop the built-in pragma preserve-list
+  --keep REGEX          also keep comments matching REGEX (repeatable)
+  --default-keeps / --no-default-keeps
+                        keep the built-in pragma preserve-list (default: true)
   --exclude GLOB        skip matching paths (repeatable; matches basename
                         or full path)
   --jobs N              worker processes (default: CPU count)
+  --config PATH         read configuration from this pyproject.toml instead
+                        of discovering one
+  --isolated            ignore any pyproject.toml configuration
+```
+
+## Configuration
+
+`censor` reads settings from a `[tool.censor]` table in a `pyproject.toml`,
+the same way `black` and `ruff` do:
+
+```toml
+[tool.censor]
+mode = "own-line"        # "own-line" | "docstrings" | "all"
+keep = ["^# KEEP"]       # list of regexes for comments to preserve
+default-keeps = true     # built-in pragma preserve-list (# noqa etc.)
+exclude = ["migrations/*"]
+```
+
+Discovery is black-style: starting from the common ancestor of the input
+paths, censor walks up until it finds a `pyproject.toml` with a
+`[tool.censor]` table — stopping at the project root (a directory holding
+`.git` or `.hg`). Pass `--config PATH` to read an explicit file (it may be
+a normal pyproject or carry a bare top-level `[censor]` table), or
+`--isolated` to ignore configuration entirely.
+
+Precedence follows the black convention: **configuration supplies defaults;
+any explicit CLI flag wins outright** (`check`, `diff`, `jobs` and paths are
+CLI-only and cannot be set in the file).
+
+## CI gate
+
+```console
+$ censor --check src/
+would strip comments from: src/pkg/mod.py
+censor: 1 files contain comments censor would delete.
+censor: to fix, run: censor src/
+censor: (rewrites in place; run with --diff first to preview the deletions)
+$ echo $?
+1
 ```
 
 Directories are searched recursively for `*.py`; `.git`, `.venv`, `venv`,

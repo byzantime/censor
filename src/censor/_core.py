@@ -45,21 +45,16 @@ __all__ = [
 class Mode(enum.Enum):
     """What gets deleted."""
 
-    #: Comments that occupy their own line (the default).
     OWN_LINE = "own-line"
-    #: Own-line comments plus module/class/function docstrings.
     DOCSTRINGS = "docstrings"
-    #: Every comment, including trailing ones.
     ALL = "all"
 
 
-#: Tool pragmas preserved in every mode unless default keeps are disabled.
 DEFAULT_KEEPS: "Pattern[str]" = re.compile(
     r"^#\s*(?:noqa\b|fmt:|isort:|ruff:|mypy:|type:|pyright:|pragma:)",
     re.IGNORECASE,
 )
 
-# PEP 263 encoding declaration; only honoured on lines 1-2.
 _CODING = re.compile(r"^#.*?coding[:=][ \t]*[-_.a-zA-Z0-9]+")
 
 _DOCSTRING_OWNERS = (
@@ -173,11 +168,8 @@ def strip_source(
 class DocstringViolation(NamedTuple):
     """A docstring whose line count exceeds a configured cap."""
 
-    #: ``"module"`` for the module docstring, else the owner's name.
     name: str
-    #: 1-based source line where the docstring statement starts.
     lineno: int
-    #: Number of content lines in the docstring's text.
     lines: int
 
 
@@ -236,8 +228,6 @@ def _significant_tokens(src: str) -> "List[Tuple[int, str]]":
     for tok in tokenize.generate_tokens(io.StringIO(src).readline):
         if tok.type in _INSIGNIFICANT:
             continue
-        # A NEWLINE's own text carries no meaning (the tokenizer synthesises
-        # an empty one at EOF); its presence and position still must match.
         sig.append(
             (tok.type, "" if tok.type == tokenize.NEWLINE else tok.string)
         )
