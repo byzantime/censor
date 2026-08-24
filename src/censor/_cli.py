@@ -30,7 +30,6 @@ from censor._core import docstring_violations
 from censor._core import strip_source
 from censor._core import verify
 
-#: Directories never descended into (in addition to ``--exclude`` globs).
 SKIP_DIRS = frozenset(
     {
         ".git",
@@ -48,7 +47,6 @@ SKIP_DIRS = frozenset(
     }
 )
 
-#: Below this many files the process pool costs more than it saves.
 SERIAL_THRESHOLD = 20
 
 UNCHANGED = "unchanged"
@@ -56,10 +54,8 @@ CHANGED = "changed"
 SKIPPED = "skipped"  # could not be tokenized/parsed/decoded; left untouched
 FAILED = "failed"  # verification refused the result; left untouched
 
-#: Project-root markers: config discovery stops after a directory with one.
 PROJECT_ROOT_MARKERS = frozenset({".git", ".hg"})
 
-#: Keys allowed in ``[tool.censor]`` mapped to the type each value must have.
 CONFIG_KEYS = {
     "mode": str,
     "keep": list,
@@ -168,7 +164,6 @@ class Result(NamedTuple):
     status: str
     message: "Optional[str]" = None
     diff: "Optional[str]" = None
-    #: Formatted docstring-length violations (--max-doc-lines only).
     violations: "Tuple[str, ...]" = ()
 
 
@@ -198,7 +193,6 @@ def _discover(
                     ):
                         files.add(full)
         elif root.is_file():
-            # Explicitly named files are taken as-is, .py suffix or not.
             files.add(str(root))
         else:
             missing.append(str(root))
@@ -296,21 +290,17 @@ def _finish(
 
 
 def _process_one(cfg: _Config, path: str) -> Result:
-    # Rewrite symlinks' targets rather than replacing the links themselves.
     path = os.path.realpath(path)
     try:
         src, encoding = _read_source(path)
     except (OSError, SyntaxError, UnicodeDecodeError, LookupError) as exc:
         return Result(path, SKIPPED, "cannot read: %s" % exc)
     if src.count("\r") != src.count("\r\n"):
-        # Lone-CR line endings would desynchronise our \n-based line view
-        # from the tokenizer's; vanishingly rare, so refuse rather than risk.
         return Result(path, SKIPPED, "lone-CR line endings are not supported")
     keep = re.compile(cfg.keep) if cfg.keep is not None else None
     try:
         violations = _doc_violation_lines(cfg, path, src)
     except SyntaxError as exc:
-        # A file that tokenizes but doesn't parse (comment-only modes).
         return Result(path, SKIPPED, "cannot parse: %s" % exc)
     try:
         stripped = strip_source(
@@ -380,8 +370,6 @@ def _build_parser() -> argparse.ArgumentParser:
         const=Mode.ALL,
         help="delete every comment, including trailing ones",
     )
-    # None means "not given"; the effective value comes from config
-    # discovery, falling back to Mode.OWN_LINE.
     parser.set_defaults(mode=None)
     parser.add_argument(
         "--diff",
@@ -395,9 +383,6 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--max-doc-lines",
-        # Deliberately outside the mode group: a check, not a mode — it
-        # composes with every mode (including the default) and never
-        # rewrites docstrings.
         type=int,
         metavar="N",
         help="report docstrings longer than N content lines; exit 1 if any "
@@ -479,8 +464,6 @@ def _merge(
     if not patterns:
         keep = None
     else:
-        # Each pattern is validated individually so the error names the
-        # offender, then bracketed so alternation can't bleed across them.
         for pattern in patterns:
             try:
                 re.compile(pattern)

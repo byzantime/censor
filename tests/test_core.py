@@ -16,9 +16,6 @@ def strip(src, mode=Mode.OWN_LINE, **kw):
     return out
 
 
-# --- own-line mode (the default) -------------------------------------------
-
-
 def test_own_line_deleted_trailing_kept():
     src = "# banner\nx = 1  # trailing\n    # indented\ny = 2\n"
     assert strip(src) == "x = 1  # trailing\ny = 2\n"
@@ -61,9 +58,6 @@ def test_form_feed_does_not_desync_lines():
     assert strip(src) == "x = 1\ny = 2\n"
 
 
-# --- all mode ---------------------------------------------------------------
-
-
 def test_all_removes_trailing_comment_and_padding():
     src = "x = 1    # trailing\n# own\ny = 2\n"
     assert strip(src, Mode.ALL) == "x = 1\ny = 2\n"
@@ -80,9 +74,6 @@ def test_all_keeps_crlf_of_edited_line():
 def test_all_comment_after_open_bracket():
     src = "foo = dict(  # opening\n    a=1,\n)\n"
     assert strip(src, Mode.ALL) == "foo = dict(\n    a=1,\n)\n"
-
-
-# --- docstrings mode --------------------------------------------------------
 
 
 def test_docstrings_removed_everywhere():
@@ -109,7 +100,6 @@ def test_docstrings_removed_everywhere():
     out = strip(src, Mode.DOCSTRINGS)
     assert '"""' not in out
     assert "# comment" not in out
-    # sole-statement bodies got a pass at the docstring's indentation
     assert "class C:\n\n    def method(self):\n        return os" in out
     assert "async def f():\n    pass\n" in out
 
@@ -156,8 +146,6 @@ def test_fstring_first_statement_is_not_a_docstring():
     src = 'f"""not a docstring {1}"""\nx = 1\n'
     assert strip(src, Mode.DOCSTRINGS) == src
 
-
-# --- always-preserved comments ---------------------------------------------
 
 SHEBANG_SRC = (
     "#!/usr/bin/env python\n# -*- coding: utf-8 -*-\n# normal\nx = 1  # t\n"
@@ -207,9 +195,6 @@ def test_keep_regex():
     assert out == "# KEEP: license\nx = 1\n"
 
 
-# --- verification gate ------------------------------------------------------
-
-
 def test_verify_rejects_code_deletion():
     src = "x = 1\ny = 2\n"
     assert not verify(src, "x = 1\n", Mode.OWN_LINE)
@@ -230,9 +215,6 @@ def test_idempotent():
     for mode in Mode:
         once = strip(src, mode)
         assert strip(once, mode) == once
-
-
-# --- CLI --------------------------------------------------------------------
 
 
 def test_cli_default_strips_in_place(tmp_path, capsys):
@@ -389,9 +371,6 @@ def test_cli_preserves_file_mode(tmp_path):
     assert f.read_text() == "#!/usr/bin/env python\nx = 1\n"
 
 
-# --- pyproject.toml configuration ------------------------------------------
-
-
 def test_cli_config_discovered_from_pyproject(tmp_path, capsys):
     (tmp_path / "pyproject.toml").write_text('[tool.censor]\nmode = "all"\n')
     f = tmp_path / "a.py"
@@ -407,8 +386,6 @@ def test_cli_config_discovery_stops_at_project_root(tmp_path):
     sub = proj / "sub"
     sub.mkdir()
     f = sub / "a.py"
-    # The nested project root (.git) stops discovery before reaching the
-    # outer config; own-line mode is used, so the trailing comment survives.
     f.write_text("x = 1  # stays\n")
     assert main([str(sub)]) == 0
     assert "# stays" in f.read_text()
@@ -528,9 +505,6 @@ def test_cli_check_rerun_command_drops_check_and_diff(tmp_path, capsys):
     assert "--diff" not in err.splitlines()[1]
 
 
-# --- docstring length cap ---------------------------------------------------
-
-
 def dv(src, n):
     from censor import docstring_violations
 
@@ -541,7 +515,6 @@ def test_doc_counting_one_liners():
     assert not dv('def f():\n    """one"""\n', 1)
     v = dv('def f():\n    """one""" \n', 0)
     assert v == [("f", 2, 1)]
-    # bare-quote block: quote-only first/last lines don't count
     src = 'def f():\n    """\n    one\n    """\n'
     assert dv(src, 0) == [("f", 2, 1)]
 
@@ -591,7 +564,6 @@ def test_cli_max_doc_lines_composes_with_default_mode(tmp_path, capsys):
     f = tmp_path / "a.py"
     f.write_text('# gone\ndef f():\n    """a\n    b"""\n')
     assert main([str(f)]) == 0
-    # default mode stripped the comment; docstrings are untouched there
     assert f.read_text() == 'def f():\n    """a\n    b"""\n'
     out, err = capsys.readouterr()
     assert "violations" not in err
@@ -605,9 +577,7 @@ def test_cli_max_doc_lines_reports_and_exits_1(tmp_path, capsys):
     out, err = capsys.readouterr()
     assert "%s:2: docstring of 'f' has 3 lines (limit 2)" % f in out
     assert "1 docstring violations" in err
-    # nothing was rewritten
     assert f.read_text() == 'def f():\n    """a\n    b\n    c"""\n'
-    # under the limit: exit 0
     assert main(["--max-doc-lines", "5", str(f)]) == 0
 
 
