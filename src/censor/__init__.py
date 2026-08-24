@@ -9,10 +9,20 @@ Library use::
 """
 
 from censor._core import DEFAULT_KEEPS
+from censor._core import DocstringViolation
 from censor._core import Mode
+from censor._core import docstring_violations
 from censor._core import strip_source
 from censor._core import verify
 
 __version__ = "0.1.0"
 
-__all__ = ["Mode", "strip_source", "verify", "DEFAULT_KEEPS", "__version__"]
+__all__ = [
+    "Mode",
+    "strip_source",
+    "verify",
+    "DEFAULT_KEEPS",
+    "DocstringViolation",
+    "docstring_violations",
+    "__version__",
+]

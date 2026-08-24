@@ -24,6 +24,7 @@ from typing import Sequence
 from typing import Tuple
 
 from censor._core import Mode
+from censor._core import docstring_violations
 from censor._core import strip_source
 from censor._core import verify
 
@@ -59,6 +60,8 @@ class Result(NamedTuple):
     status: str
     message: "Optional[str]" = None
     diff: "Optional[str]" = None
+    #: Formatted docstring-length violations (--max-doc-lines only).
+    violations: "Tuple[str, ...]" = ()
 
 
 def _excluded(path: str, name: str, excludes: "Sequence[str]") -> bool:
@@ -117,6 +120,7 @@ class _Config(NamedTuple):
     default_keeps: bool
     write: bool
     want_diff: bool
+    max_doc_lines: "Optional[int]" = None
 
 
 def _read_source(path: str) -> "Tuple[str, str]":
@@ -147,6 +151,42 @@ def _diff(path: str, src: str, stripped: str) -> str:
     )
 
 
+def _doc_violation_lines(
+    cfg: _Config, path: str, src: str
+) -> "Tuple[str, ...]":
+    """Formatted --max-doc-lines violations for *src* (empty when unset)."""
+    if cfg.max_doc_lines is None:
+        return ()
+    vs = docstring_violations(src, cfg.max_doc_lines)
+    return tuple(
+        "%s:%d: docstring of '%s' has %d lines (limit %d)"
+        % (path, v.lineno, v.name, v.lines, cfg.max_doc_lines)
+        for v in vs
+    )
+
+
+def _finish(
+    cfg: _Config,
+    path: str,
+    src: str,
+    stripped: str,
+    encoding: str,
+    violations: "Tuple[str, ...]",
+) -> Result:
+    """Diff and/or write *stripped* after verification already passed."""
+    diff = None
+    if cfg.want_diff:
+        diff = _diff(path, src, stripped)
+    if cfg.write:
+        try:
+            _atomic_write(path, stripped.encode(encoding))
+        except OSError as exc:
+            return Result(
+                path, FAILED, "cannot write: %s" % exc, None, violations
+            )
+    return Result(path, CHANGED, None, diff, violations)
+
+
 def _process_one(cfg: _Config, path: str) -> Result:
     # Rewrite symlinks' targets rather than replacing the links themselves.
     path = os.path.realpath(path)
@@ -160,26 +200,31 @@ def _process_one(cfg: _Config, path: str) -> Result:
         return Result(path, SKIPPED, "lone-CR line endings are not supported")
     keep = re.compile(cfg.keep) if cfg.keep is not None else None
     try:
+        violations = _doc_violation_lines(cfg, path, src)
+    except SyntaxError as exc:
+        # A file that tokenizes but doesn't parse (comment-only modes).
+        return Result(path, SKIPPED, "cannot parse: %s" % exc)
+    try:
         stripped = strip_source(
             src, Mode(cfg.mode), keep, default_keeps=cfg.default_keeps
         )
     except (SyntaxError, tokenize.TokenError, ValueError) as exc:
-        return Result(path, SKIPPED, "cannot parse: %s" % exc)
+        return Result(path, SKIPPED, "cannot parse: %s" % exc, None, violations)
     except Exception as exc:  # never let an engine bug touch the file
-        return Result(path, FAILED, "internal error: %r" % exc)
+        return Result(
+            path, FAILED, "internal error: %r" % exc, None, violations
+        )
     if stripped == src:
-        return Result(path, UNCHANGED)
+        return Result(path, UNCHANGED, None, None, violations)
     if not _verified(src, stripped, Mode(cfg.mode)):
-        return Result(path, FAILED, "verification failed; file left untouched")
-    diff = None
-    if cfg.want_diff:
-        diff = _diff(path, src, stripped)
-    if cfg.write:
-        try:
-            _atomic_write(path, stripped.encode(encoding))
-        except OSError as exc:
-            return Result(path, FAILED, "cannot write: %s" % exc)
-    return Result(path, CHANGED, None, diff)
+        return Result(
+            path,
+            FAILED,
+            "verification failed; file left untouched",
+            None,
+            violations,
+        )
+    return _finish(cfg, path, src, stripped, encoding, violations)
 
 
 def _run(cfg: _Config, files: "List[str]", jobs: int) -> "Iterator[Result]":
@@ -239,6 +284,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help="write nothing; exit 1 if any file would change",
     )
     parser.add_argument(
+        "--max-doc-lines",
+        # Deliberately outside the mode group: a check, not a mode — it
+        # composes with every mode (including the default) and never
+        # rewrites docstrings.
+        type=int,
+        metavar="N",
+        help="report docstrings longer than N content lines; exit 1 if any "
+        "(composes with every mode)",
+    )
+    parser.add_argument(
         "--keep", metavar="REGEX", help="also keep comments matching this regex"
     )
     parser.add_argument(
@@ -270,6 +325,10 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def _report(result: Result, ns: argparse.Namespace, counts: "dict") -> None:
     counts[result.status] += 1
+    if result.violations:
+        counts["violations"] += len(result.violations)
+        for line in result.violations:
+            print(line)
     if result.diff:
         sys.stdout.write(result.diff)
     if result.status == CHANGED and ns.check and not ns.diff:
@@ -286,6 +345,8 @@ def main(argv: "Optional[Sequence[str]]" = None) -> int:
             re.compile(ns.keep)
         except re.error as exc:
             parser.error("invalid --keep regex: %s" % exc)
+    if ns.max_doc_lines is not None and ns.max_doc_lines < 1:
+        parser.error("--max-doc-lines must be at least 1")
     files, missing = _discover(ns.paths, ns.exclude)
     for path in missing:
         print("censor: no such file or directory: %s" % path, file=sys.stderr)
@@ -295,16 +356,21 @@ def main(argv: "Optional[Sequence[str]]" = None) -> int:
 
     write = not (ns.diff or ns.check)
     cfg = _Config(
-        ns.mode.value, ns.keep, not ns.no_default_keeps, write, ns.diff
+        ns.mode.value,
+        ns.keep,
+        not ns.no_default_keeps,
+        write,
+        ns.diff,
+        ns.max_doc_lines,
     )
     jobs = ns.jobs if ns.jobs is not None else os.cpu_count() or 1
 
-    counts = {UNCHANGED: 0, CHANGED: 0, SKIPPED: 0, FAILED: 0}
+    counts = {UNCHANGED: 0, CHANGED: 0, SKIPPED: 0, FAILED: 0, "violations": 0}
     for result in _run(cfg, files, jobs):
         _report(result, ns, counts)
 
     verb = "would change" if ns.check or ns.diff else "changed"
-    print(
+    summary = (
         "censor: %d file%s: %d %s, %d unchanged, %d skipped, %d failed"
         % (
             len(files),
@@ -314,12 +380,14 @@ def main(argv: "Optional[Sequence[str]]" = None) -> int:
             counts[UNCHANGED],
             counts[SKIPPED],
             counts[FAILED],
-        ),
-        file=sys.stderr,
+        )
     )
+    if ns.max_doc_lines is not None:
+        summary += ", %d docstring violations" % counts["violations"]
+    print(summary, file=sys.stderr)
     if counts[FAILED] or counts[SKIPPED] or missing:
         return 2
-    if ns.check and counts[CHANGED]:
+    if (ns.check and counts[CHANGED]) or counts["violations"]:
         return 1
     return 0
 

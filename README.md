@@ -70,6 +70,8 @@ censor PATH... [--docstrings | --all] [options]
 
   --diff                print unified diffs instead of writing
   --check               write nothing; exit 1 if any file would change
+  --max-doc-lines N     report docstrings longer than N content lines; exit 1
+                        if any (composes with every mode)
   --keep REGEX          also keep comments matching REGEX
   --no-default-keeps    drop the built-in pragma preserve-list
   --exclude GLOB        skip matching paths (repeatable; matches basename
@@ -81,8 +83,23 @@ Directories are searched recursively for `*.py`; `.git`, `.venv`, `venv`,
 `__pycache__`, `build`, `dist`, `.tox`, `.nox`, `.eggs` and common tool
 caches are skipped. Explicitly named files are processed as-is.
 
-Exit codes: `0` success, `1` changes needed (`--check` only), `2` any file
-skipped or failed (every such file is listed on stderr, and left untouched).
+Exit codes: `0` success, `1` changes needed (`--check`, or docstring
+violations from `--max-doc-lines`), `2` any file skipped or failed (every
+such file is listed on stderr, and left untouched).
+
+## Docstring length cap
+
+```console
+$ censor --check --max-doc-lines 20 src/   # CI gate for oversized docstrings
+```
+
+`--max-doc-lines N` reports every module/class/function docstring whose
+content spans more than *N* lines, as
+`path:lineno: docstring of 'name' has M lines (limit N)`. It is a check,
+never a rewrite: docstrings are never modified by this flag, and it composes
+with every mode. The count covers the docstring's own text — interior blank
+lines count, the quote-only opening/closing lines do not. Any violation
+makes the exit code 1.
 
 Performance: files are processed in parallel with a process pool; stripping
 plus verifying runs at roughly 8 MB of source per second per core (the
