@@ -589,11 +589,7 @@ def main(argv: "Optional[Sequence[str]]" = None) -> int:
     if counts[FAILED] or counts[SKIPPED] or missing:
         return 2
     if checking and counts[CHANGED]:
-        rest = [
-            a
-            for a in argv[1:]
-            if a not in ("--check", "--diff", "--fix")
-        ]
+        rest = [a for a in argv[1:] if a not in ("--check", "--diff", "--fix")]
         rerun = shlex.join(["format", *rest])
         print(
             "censor: %d files contain comments censor would delete."

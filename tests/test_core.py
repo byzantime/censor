@@ -562,9 +562,7 @@ def test_cli_check_diff_prints_and_exits_1_without_writing(tmp_path, capsys):
     assert f.read_text() == src
 
 
-def test_cli_format_diff_prints_and_exits_0_without_writing(
-    tmp_path, capsys
-):
+def test_cli_format_diff_prints_and_exits_0_without_writing(tmp_path, capsys):
     f = tmp_path / "a.py"
     src = "# gone\nx = 1\n"
     f.write_text(src)
