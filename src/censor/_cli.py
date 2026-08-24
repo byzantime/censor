@@ -357,15 +357,7 @@ def _run(cfg: _Config, files: "List[str]", jobs: int) -> "Iterator[Result]":
     return parallel()
 
 
-def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="censor",
-        description="Delete comments (and optionally docstrings) from Python "
-        "code. Files are rewritten in place, atomically, and only when "
-        "the result "
-        "provably preserves the program; anything that cannot be proven safe "
-        "is left untouched and reported.",
-    )
+def _build_shared_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "paths",
         nargs="+",
@@ -393,11 +385,6 @@ def _build_parser() -> argparse.ArgumentParser:
         "--diff",
         action="store_true",
         help="print unified diffs instead of writing",
-    )
-    parser.add_argument(
-        "--check",
-        action="store_true",
-        help="write nothing; exit 1 if any file would change",
     )
     parser.add_argument(
         "--max-doc-lines",
@@ -443,12 +430,62 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="N",
         help="worker processes (default: number of CPUs)",
     )
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="censor",
+        description="Delete comments (and optionally docstrings) from Python "
+        "code. Files are rewritten in place, atomically, and only when "
+        "the result "
+        "provably preserves the program; anything that cannot be proven safe "
+        "is left untouched and reported.",
+    )
     from censor import __version__
 
     parser.add_argument(
         "--version", action="version", version="%(prog)s " + __version__
     )
+    parent = argparse.ArgumentParser(add_help=False)
+    _build_shared_options(parent)
+    subparsers = parser.add_subparsers(
+        dest="command", required=True, metavar="COMMAND"
+    )
+    check = subparsers.add_parser(
+        "check",
+        parents=[parent],
+        help="report what would change, without writing (like ruff check)",
+    )
+    check.add_argument(
+        "--fix",
+        action="store_true",
+        help="rewrite the offending files in place",
+    )
+    fmt = subparsers.add_parser(
+        "format",
+        parents=[parent],
+        aliases=["strip"],
+        help="strip in place (like black); add --check to only report",
+    )
+    fmt.add_argument(
+        "--check",
+        action="store_true",
+        help="write nothing; exit 1 if any file would change",
+    )
     return parser
+
+
+def _normalise_argv(argv: List[str], parser: argparse.ArgumentParser) -> None:
+    """Hoist the command token so flags before it still parse."""
+    for i, arg in enumerate(argv):
+        if arg in ("check", "format", "strip"):
+            if i != 0:
+                argv.insert(0, argv.pop(i))
+            return
+    parser.error(
+        "no command given; use `censor check PATH` to report or "
+        "`censor format PATH` to rewrite in place"
+    )
 
 
 def _report(result: Result, ns: argparse.Namespace, counts: "dict") -> None:
@@ -504,7 +541,10 @@ def _merge(
 
 def main(argv: "Optional[Sequence[str]]" = None) -> int:
     parser = _build_parser()
+    argv = list(sys.argv[1:]) if argv is None else list(argv)
+    _normalise_argv(argv, parser)
     ns = parser.parse_args(argv)
+    command = "format" if ns.command == "strip" else ns.command
     if ns.max_doc_lines is not None and ns.max_doc_lines < 1:
         parser.error("--max-doc-lines must be at least 1")
     config = _load_config(ns.paths, ns.config, ns.isolated, parser)
@@ -516,7 +556,11 @@ def main(argv: "Optional[Sequence[str]]" = None) -> int:
         print("censor: no Python files found", file=sys.stderr)
         return 2 if missing else 0
 
-    write = not (ns.diff or ns.check)
+    checking = (command == "check" and not ns.fix) or (
+        command != "check" and ns.check
+    )
+    ns.check = checking
+    write = not checking and not ns.diff
     cfg = _Config(
         mode.value, keep, default_keeps, write, ns.diff, ns.max_doc_lines
     )
@@ -526,7 +570,7 @@ def main(argv: "Optional[Sequence[str]]" = None) -> int:
     for result in _run(cfg, files, jobs):
         _report(result, ns, counts)
 
-    verb = "would change" if ns.check or ns.diff else "changed"
+    verb = "would change" if checking or ns.diff else "changed"
     summary = (
         "censor: %d file%s: %d %s, %d unchanged, %d skipped, %d failed"
         % (
@@ -544,9 +588,13 @@ def main(argv: "Optional[Sequence[str]]" = None) -> int:
     print(summary, file=sys.stderr)
     if counts[FAILED] or counts[SKIPPED] or missing:
         return 2
-    if ns.check and counts[CHANGED]:
-        argv = sys.argv[1:] if argv is None else list(argv)
-        rerun = shlex.join(a for a in argv if a not in ("--check", "--diff"))
+    if checking and counts[CHANGED]:
+        rest = [
+            a
+            for a in argv[1:]
+            if a not in ("--check", "--diff", "--fix")
+        ]
+        rerun = shlex.join(["format", *rest])
         print(
             "censor: %d files contain comments censor would delete."
             % counts[CHANGED],
@@ -558,7 +606,7 @@ def main(argv: "Optional[Sequence[str]]" = None) -> int:
             "the deletions)",
             file=sys.stderr,
         )
-    if (ns.check and counts[CHANGED]) or counts["violations"]:
+    if (checking and counts[CHANGED]) or counts["violations"]:
         return 1
     return 0
 
