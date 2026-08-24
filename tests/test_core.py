@@ -519,10 +519,14 @@ def test_doc_counting_one_liners():
     assert dv(src, 0) == [("f", 2, 1)]
 
 
-def test_doc_interior_blank_lines_count():
+def test_doc_blank_lines_not_counted():
     src = 'def f():\n    """a\n\n    b"""\n'
-    assert dv(src, 2) == [("f", 2, 3)]
-    assert not dv(src, 3)
+    assert dv(src, 1) == [("f", 2, 2)]
+    assert not dv(src, 2)
+    assert not dv('def f():\n    """Test."""\n', 1)
+    assert not dv('def f():\n    """Test.\n\n    Foo."""\n', 2)
+    assert dv('def f():\n    """Test.\n\n    Foo."""\n', 1) == [("f", 2, 2)]
+    assert not dv('def f():\n    """Test.\n\n    Foo.\n    """\n', 2)
 
 
 def test_doc_empty_docstring_is_zero_lines():
