@@ -138,7 +138,7 @@ content spans more than *N* lines, as
 `path:lineno: docstring of 'name' has M lines (limit N)`. It is a check,
 never a rewrite: docstrings are never modified by this flag, and it composes
 with every mode. The count covers the docstring's own text — interior blank
-lines count, the quote-only opening/closing lines do not. Any violation
+lines do not count, the quote-only opening/closing lines do not. Any violation
 makes the exit code 1.
 
 Performance: files are processed in parallel with a process pool; stripping

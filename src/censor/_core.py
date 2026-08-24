@@ -199,10 +199,10 @@ def docstring_violations(src: str, max_lines: int) -> List[DocstringViolation]:
     """Docstrings in *src* whose content exceeds *max_lines* lines.
 
     The count covers the docstring's own text with the quotes stripped:
-    interior blank lines count, the quote-only opening and closing lines do
-    not, so both ``'''one-liner'''`` and its bare-quote block equivalent are
-    one line.  Never rewrites anything; raises :class:`SyntaxError` when
-    *src* does not parse.
+    interior blank lines do not count, the quote-only opening and closing
+    lines do not, so both ``'''one-liner'''`` and its bare-quote block
+    equivalent are one line.  Never rewrites anything; raises
+    :class:`SyntaxError` when *src* does not parse.
     """
     tree = ast.parse(src)
     violations = []
@@ -213,7 +213,7 @@ def docstring_violations(src: str, max_lines: int) -> List[DocstringViolation]:
         if found is None:
             continue
         doc, const = found
-        n = len(const.value.strip().splitlines())
+        n = sum(1 for line in const.value.splitlines() if line.strip())
         if n > max_lines:
             name = "module" if isinstance(node, ast.Module) else node.name
             violations.append(DocstringViolation(name, doc.lineno, n))
