@@ -69,7 +69,7 @@ CONFIG_KEYS = {
 
 def _read_toml(path: Path, parser: argparse.ArgumentParser) -> dict:
     try:
-        return tomllib.loads(Path(path).read_text(encoding="utf-8"))
+        return tomllib.loads(path.read_text(encoding="utf-8"))
     except OSError as exc:
         parser.error("cannot read %s: %s" % (path, exc))
     except tomllib.TOMLDecodeError as exc:
@@ -420,12 +420,14 @@ def _merge(
     if not patterns:
         keep = None
     else:
-        # Each pattern is bracketed so alternation can't bleed across them.
+        # Each pattern is validated individually so the error names the
+        # offender, then bracketed so alternation can't bleed across them.
+        for pattern in patterns:
+            try:
+                re.compile(pattern)
+            except re.error as exc:
+                parser.error("invalid --keep regex %r: %s" % (pattern, exc))
         keep = "|".join("(?:%s)" % p for p in patterns)
-        try:
-            re.compile(keep)
-        except re.error as exc:
-            parser.error("invalid --keep regex: %s" % exc)
     if ns.default_keeps is not None:
         default_keeps = ns.default_keeps
     elif "default-keeps" in config:
