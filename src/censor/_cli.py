@@ -81,6 +81,10 @@ def _explicit_config(
     table = data.get("censor", data.get("tool", {}).get("censor"))
     if table is None:
         return {}
+    if not isinstance(table, dict):
+        parser.error(
+            "%s: [tool.censor] must be a table, got %r" % (config_path, table)
+        )
     return _validate_config(table, str(config_path), parser)
 
 
@@ -116,6 +120,27 @@ def _load_config(
     return {}
 
 
+def _validate_list_key(
+    key: str, entries: list, source: str, parser: argparse.ArgumentParser
+) -> None:
+    """Every entry of a list-valued key must be a string; ``keep`` entries
+    must additionally compile as regexes."""
+    for entry in entries:
+        if not isinstance(entry, str):
+            parser.error(
+                "%s: [tool.censor] %s entries must be strings, got %r"
+                % (source, key, entry)
+            )
+        if key == "keep":
+            try:
+                re.compile(entry)
+            except re.error as exc:
+                parser.error(
+                    "%s: [tool.censor] keep entry %r is not a valid "
+                    "regex: %s" % (source, entry, exc)
+                )
+
+
 def _validate_config(
     table: dict, source: str, parser: argparse.ArgumentParser
 ) -> dict:
@@ -147,15 +172,8 @@ def _validate_config(
                 "%s: [tool.censor] mode must be one of: %s"
                 % (source, ", ".join(m.value for m in Mode))
             )
-        if key == "keep":
-            for pattern in value:
-                try:
-                    re.compile(pattern)
-                except re.error as exc:
-                    parser.error(
-                        "%s: [tool.censor] keep entry %r is not a valid "
-                        "regex: %s" % (source, pattern, exc)
-                    )
+        if key in ("keep", "exclude"):
+            _validate_list_key(key, value, source, parser)
     return table
 
 
