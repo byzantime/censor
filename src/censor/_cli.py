@@ -9,9 +9,11 @@ import functools
 import io
 import os
 import re
+import shlex
 import sys
 import tempfile
 import tokenize
+import tomllib
 from concurrent.futures import ProcessPoolExecutor
 from fnmatch import fnmatch
 from pathlib import Path
@@ -52,6 +54,112 @@ UNCHANGED = "unchanged"
 CHANGED = "changed"
 SKIPPED = "skipped"  # could not be tokenized/parsed/decoded; left untouched
 FAILED = "failed"  # verification refused the result; left untouched
+
+#: Project-root markers: config discovery stops after a directory with one.
+PROJECT_ROOT_MARKERS = frozenset({".git", ".hg"})
+
+#: Keys allowed in ``[tool.censor]`` mapped to the type each value must have.
+CONFIG_KEYS = {
+    "mode": str,
+    "keep": list,
+    "default-keeps": bool,
+    "exclude": list,
+}
+
+
+def _read_toml(path: Path, parser: argparse.ArgumentParser) -> dict:
+    try:
+        return tomllib.loads(Path(path).read_text(encoding="utf-8"))
+    except OSError as exc:
+        parser.error("cannot read %s: %s" % (path, exc))
+    except tomllib.TOMLDecodeError as exc:
+        parser.error("invalid TOML in %s: %s" % (path, exc))
+
+
+def _explicit_config(
+    config_path: Path, parser: argparse.ArgumentParser
+) -> dict:
+    """Read ``[tool.censor]`` (or a bare top-level ``[censor]``)."""
+    data = _read_toml(config_path, parser)
+    table = data.get("censor", data.get("tool", {}).get("censor"))
+    if table is None:
+        return {}
+    return _validate_config(table, str(config_path), parser)
+
+
+def _load_config(
+    paths: "Sequence[Path]",
+    config_path: "Optional[Path]",
+    isolated: bool,
+    parser: argparse.ArgumentParser,
+) -> dict:
+    """Load ``[tool.censor]`` settings, black-style.
+
+    With no explicit *config_path*, walk up from the common ancestor of
+    *paths*; the first directory whose ``pyproject.toml`` contains a
+    ``[tool.censor]`` table wins. Discovery stops at a project root (a
+    directory holding ``.git``/``.hg``) or the filesystem root.
+    """
+    if isolated:
+        return {}
+    if config_path is not None:
+        return _explicit_config(config_path, parser)
+    try:
+        anchor = Path(os.path.commonpath([str(p) for p in paths]))
+    except ValueError:
+        return {}
+    for directory in [anchor, *anchor.parents]:
+        candidate = directory / "pyproject.toml"
+        if candidate.is_file():
+            table = _read_toml(candidate, parser).get("tool", {}).get("censor")
+            if table is not None:
+                return _validate_config(table, str(candidate), parser)
+        if any((directory / m).exists() for m in PROJECT_ROOT_MARKERS):
+            break
+    return {}
+
+
+def _validate_config(
+    table: dict, source: str, parser: argparse.ArgumentParser
+) -> dict:
+    unknown = sorted(set(table) - set(CONFIG_KEYS))
+    if unknown:
+        parser.error(
+            "unknown key%s in [tool.censor] (%s): %s; valid keys are: %s"
+            % (
+                "s" if len(unknown) != 1 else "",
+                source,
+                ", ".join(unknown),
+                ", ".join(sorted(CONFIG_KEYS)),
+            )
+        )
+    for key, value in table.items():
+        expected = CONFIG_KEYS[key]
+        if not isinstance(value, expected):
+            parser.error(
+                "%s: [tool.censor] %s must be a %s, got %r"
+                % (
+                    source,
+                    key,
+                    {str: "string", list: "list", bool: "boolean"}[expected],
+                    value,
+                )
+            )
+        if key == "mode" and value not in tuple(m.value for m in Mode):
+            parser.error(
+                "%s: [tool.censor] mode must be one of: %s"
+                % (source, ", ".join(m.value for m in Mode))
+            )
+        if key == "keep":
+            for pattern in value:
+                try:
+                    re.compile(pattern)
+                except re.error as exc:
+                    parser.error(
+                        "%s: [tool.censor] keep entry %r is not a valid "
+                        "regex: %s" % (source, pattern, exc)
+                    )
+    return table
 
 
 class Result(NamedTuple):
@@ -227,7 +335,9 @@ def _build_parser() -> argparse.ArgumentParser:
         const=Mode.ALL,
         help="delete every comment, including trailing ones",
     )
-    parser.set_defaults(mode=Mode.OWN_LINE)
+    # None means "not given"; the effective value comes from config
+    # discovery, falling back to Mode.OWN_LINE.
+    parser.set_defaults(mode=None)
     parser.add_argument(
         "--diff",
         action="store_true",
@@ -239,20 +349,35 @@ def _build_parser() -> argparse.ArgumentParser:
         help="write nothing; exit 1 if any file would change",
     )
     parser.add_argument(
-        "--keep", metavar="REGEX", help="also keep comments matching this regex"
+        "--keep",
+        metavar="REGEX",
+        action="append",
+        help="also keep comments matching REGEX (repeatable)",
     )
     parser.add_argument(
-        "--no-default-keeps",
-        action="store_true",
-        help="do not keep # noqa / # type: / # pragma: "
-        "and friends (shebang and coding lines always survive)",
+        "--default-keeps",
+        action=argparse.BooleanOptionalAction,
+        help="keep the built-in pragma preserve-list (# noqa / # type: / "
+        "# pragma: and friends); shebang and coding lines always survive "
+        "(default: true)",
     )
     parser.add_argument(
         "--exclude",
         action="append",
-        default=[],
         metavar="GLOB",
         help="skip paths matching this glob (repeatable)",
+    )
+    parser.add_argument(
+        "--config",
+        type=Path,
+        metavar="PATH",
+        help="read configuration from this pyproject.toml instead of "
+        "discovering one",
+    )
+    parser.add_argument(
+        "--isolated",
+        action="store_true",
+        help="ignore any pyproject.toml configuration",
     )
     parser.add_argument(
         "--jobs",
@@ -273,20 +398,54 @@ def _report(result: Result, ns: argparse.Namespace, counts: "dict") -> None:
     if result.diff:
         sys.stdout.write(result.diff)
     if result.status == CHANGED and ns.check and not ns.diff:
-        print(result.path)
+        print("would strip comments from: %s" % result.path)
     if result.message:
         print("censor: %s: %s" % (result.path, result.message), file=sys.stderr)
+
+
+def _merge(
+    ns: argparse.Namespace, config: dict, parser: argparse.ArgumentParser
+) -> "Tuple[Mode, Optional[str], bool, List[str]]":
+    """Resolve (mode, keep-regex, default_keeps, exclude): config supplies
+    defaults, any explicit CLI flag wins outright."""
+    if ns.mode is not None:
+        mode = ns.mode
+    elif "mode" in config:
+        mode = Mode(config["mode"])
+    else:
+        mode = Mode.OWN_LINE
+    patterns = (
+        list(ns.keep) if ns.keep is not None else list(config.get("keep") or [])
+    )
+    if not patterns:
+        keep = None
+    else:
+        # Each pattern is bracketed so alternation can't bleed across them.
+        keep = "|".join("(?:%s)" % p for p in patterns)
+        try:
+            re.compile(keep)
+        except re.error as exc:
+            parser.error("invalid --keep regex: %s" % exc)
+    if ns.default_keeps is not None:
+        default_keeps = ns.default_keeps
+    elif "default-keeps" in config:
+        default_keeps = config["default-keeps"]
+    else:
+        default_keeps = True
+    exclude = (
+        list(ns.exclude)
+        if ns.exclude is not None
+        else list(config.get("exclude") or [])
+    )
+    return mode, keep, default_keeps, exclude
 
 
 def main(argv: "Optional[Sequence[str]]" = None) -> int:
     parser = _build_parser()
     ns = parser.parse_args(argv)
-    if ns.keep is not None:
-        try:
-            re.compile(ns.keep)
-        except re.error as exc:
-            parser.error("invalid --keep regex: %s" % exc)
-    files, missing = _discover(ns.paths, ns.exclude)
+    config = _load_config(ns.paths, ns.config, ns.isolated, parser)
+    mode, keep, default_keeps, exclude = _merge(ns, config, parser)
+    files, missing = _discover(ns.paths, exclude)
     for path in missing:
         print("censor: no such file or directory: %s" % path, file=sys.stderr)
     if not files:
@@ -294,9 +453,7 @@ def main(argv: "Optional[Sequence[str]]" = None) -> int:
         return 2 if missing else 0
 
     write = not (ns.diff or ns.check)
-    cfg = _Config(
-        ns.mode.value, ns.keep, not ns.no_default_keeps, write, ns.diff
-    )
+    cfg = _Config(mode.value, keep, default_keeps, write, ns.diff)
     jobs = ns.jobs if ns.jobs is not None else os.cpu_count() or 1
 
     counts = {UNCHANGED: 0, CHANGED: 0, SKIPPED: 0, FAILED: 0}
@@ -320,6 +477,19 @@ def main(argv: "Optional[Sequence[str]]" = None) -> int:
     if counts[FAILED] or counts[SKIPPED] or missing:
         return 2
     if ns.check and counts[CHANGED]:
+        argv = sys.argv[1:] if argv is None else list(argv)
+        rerun = shlex.join(a for a in argv if a not in ("--check", "--diff"))
+        print(
+            "censor: %d files contain comments censor would delete."
+            % counts[CHANGED],
+            file=sys.stderr,
+        )
+        print("censor: to fix, run: censor %s" % rerun, file=sys.stderr)
+        print(
+            "censor: (rewrites in place; run with --diff first to preview "
+            "the deletions)",
+            file=sys.stderr,
+        )
         return 1
     return 0
 

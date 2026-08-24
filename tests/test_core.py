@@ -387,3 +387,142 @@ def test_cli_preserves_file_mode(tmp_path):
     assert main([str(f)]) == 0
     assert f.stat().st_mode & 0o777 == 0o755
     assert f.read_text() == "#!/usr/bin/env python\nx = 1\n"
+
+
+# --- pyproject.toml configuration ------------------------------------------
+
+
+def test_cli_config_discovered_from_pyproject(tmp_path, capsys):
+    (tmp_path / "pyproject.toml").write_text('[tool.censor]\nmode = "all"\n')
+    f = tmp_path / "a.py"
+    f.write_text("x = 1  # gone\n")
+    assert main([str(tmp_path)]) == 0
+    assert f.read_text() == "x = 1\n"
+
+
+def test_cli_config_discovery_stops_at_project_root(tmp_path):
+    (tmp_path / "pyproject.toml").write_text('[tool.censor]\nmode = "all"\n')
+    proj = tmp_path / "proj"
+    (proj / ".git").mkdir(parents=True)
+    sub = proj / "sub"
+    sub.mkdir()
+    f = sub / "a.py"
+    # The nested project root (.git) stops discovery before reaching the
+    # outer config; own-line mode is used, so the trailing comment survives.
+    f.write_text("x = 1  # stays\n")
+    assert main([str(sub)]) == 0
+    assert "# stays" in f.read_text()
+
+
+def test_cli_flag_beats_config(tmp_path):
+    (tmp_path / "pyproject.toml").write_text(
+        '[tool.censor]\nmode = "own-line"\n'
+    )
+    f = tmp_path / "a.py"
+    f.write_text("x = 1  # gone\n")
+    assert main(["--all", str(f)]) == 0
+    assert f.read_text() == "x = 1\n"
+
+
+def test_cli_config_keep_list_combines(tmp_path):
+    (tmp_path / "pyproject.toml").write_text(
+        '[tool.censor]\nkeep = ["KEEP", "SPARE"]\n' "default-keeps = false\n"
+    )
+    f = tmp_path / "a.py"
+    f.write_text("# KEEP me\n# SPARE me\n# noqa: file-level\nx = 1\n")
+    assert main([str(tmp_path)]) == 0
+    assert f.read_text() == "# KEEP me\n# SPARE me\nx = 1\n"
+
+
+def test_cli_flag_beats_config_keep_list(tmp_path):
+    (tmp_path / "pyproject.toml").write_text('[tool.censor]\nkeep = ["NOPE"]\n')
+    f = tmp_path / "a.py"
+    f.write_text("# KEEP me\n# NOPE me\nx = 1\n")
+    assert main(["--keep", "KEEP", str(f)]) == 0
+    assert f.read_text() == "# KEEP me\nx = 1\n"
+
+
+def test_cli_isolated_ignores_config(tmp_path, capsys):
+    (tmp_path / "pyproject.toml").write_text('[tool.censor]\nmode = "all"\n')
+    f = tmp_path / "a.py"
+    f.write_text("x = 1  # stays\n")
+    assert main(["--isolated", str(f)]) == 0
+    assert f.read_text() == "x = 1  # stays\n"
+
+
+def test_cli_explicit_config_file(tmp_path):
+    cfg = tmp_path / "other-pyproject.toml"
+    cfg.write_text('[tool.censor]\nmode = "all"\n')
+    f = tmp_path / "a.py"
+    f.write_text("x = 1  # gone\n")
+    assert main(["--config", str(cfg), str(f)]) == 0
+    assert f.read_text() == "x = 1\n"
+
+
+def test_cli_config_bare_top_level_table_accepted(tmp_path):
+    cfg = tmp_path / "censor-only.toml"
+    cfg.write_text('[censor]\nmode = "all"\n')
+    f = tmp_path / "a.py"
+    f.write_text("x = 1  # gone\n")
+    assert main(["--config", str(cfg), str(f)]) == 0
+    assert f.read_text() == "x = 1\n"
+
+
+def test_cli_unknown_config_key_errors(tmp_path, capsys):
+    (tmp_path / "pyproject.toml").write_text('[tool.censor]\nmod = "all"\n')
+    f = tmp_path / "a.py"
+    f.write_text("x = 1\n")
+    with pytest.raises(SystemExit) as exc:
+        main([str(f)])
+    assert exc.value.code == 2
+    err = capsys.readouterr().err
+    assert ": mod" in err
+    assert "valid keys are" in err
+
+
+def test_cli_wrong_typed_config_value_errors(tmp_path, capsys):
+    (tmp_path / "pyproject.toml").write_text(
+        '[tool.censor]\ndefault-keeps = "yes"\n'
+    )
+    f = tmp_path / "a.py"
+    f.write_text("x = 1\n")
+    with pytest.raises(SystemExit):
+        main([str(f)])
+    assert "must be a boolean" in capsys.readouterr().err
+
+
+def test_cli_invalid_mode_in_config_errors(tmp_path, capsys):
+    (tmp_path / "pyproject.toml").write_text(
+        '[tool.censor]\nmode = "aggressive"\n'
+    )
+    f = tmp_path / "a.py"
+    f.write_text("x = 1\n")
+    with pytest.raises(SystemExit):
+        main([str(f)])
+    assert "mode must be one of" in capsys.readouterr().err
+
+
+def test_cli_repeatable_keep_flags(tmp_path):
+    f = tmp_path / "a.py"
+    f.write_text("# A me\n# B me\n# C me\nx = 1\n")
+    assert main(["--keep", "A", "--keep", "B", str(f)]) == 0
+    assert f.read_text() == "# A me\n# B me\nx = 1\n"
+
+
+def test_cli_check_failure_prints_rerun_command(tmp_path, capsys):
+    f = tmp_path / "a.py"
+    f.write_text("# gone\nx = 1\n")
+    argv = ["--check", str(f)]
+    assert main(argv) == 1
+    out = capsys.readouterr()
+    assert "would strip comments from:" in out.out
+    assert "to fix, run: censor %s" % str(f) in out.err
+
+
+def test_cli_check_rerun_command_drops_check_and_diff(tmp_path, capsys):
+    f = tmp_path / "a.py"
+    f.write_text("# gone\nx = 1\n")
+    assert main(["--diff", "--check", str(f)]) == 1
+    err = capsys.readouterr().err
+    assert "--check" not in err.splitlines()[1]
+    assert "--diff" not in err.splitlines()[1]
