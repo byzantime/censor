@@ -426,7 +426,7 @@ def test_cli_flag_beats_config(tmp_path):
 
 def test_cli_config_keep_list_combines(tmp_path):
     (tmp_path / "pyproject.toml").write_text(
-        '[tool.censor]\nkeep = ["KEEP", "SPARE"]\n' "default-keeps = false\n"
+        '[tool.censor]\nkeep = ["KEEP", "SPARE"]\ndefault-keeps = false\n'
     )
     f = tmp_path / "a.py"
     f.write_text("# KEEP me\n# SPARE me\n# noqa: file-level\nx = 1\n")
