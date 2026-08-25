@@ -220,7 +220,7 @@ def test_idempotent():
 def test_cli_default_strips_in_place(tmp_path, capsys):
     f = tmp_path / "a.py"
     f.write_text("# gone\nx = 1  # stays\n")
-    assert main([str(tmp_path)]) == 0
+    assert main(["format", str(tmp_path)]) == 0
     assert f.read_text() == "x = 1  # stays\n"
     assert "1 changed" in capsys.readouterr().err
 
@@ -228,7 +228,7 @@ def test_cli_default_strips_in_place(tmp_path, capsys):
 def test_cli_all_mode(tmp_path):
     f = tmp_path / "a.py"
     f.write_text("x = 1  # gone\n")
-    assert main(["--all", str(f)]) == 0
+    assert main(["format", "--all", str(f)]) == 0
     assert f.read_text() == "x = 1\n"
 
 
@@ -237,7 +237,7 @@ def test_cli_symlink_target_is_rewritten_not_replaced(tmp_path):
     target.write_text("# gone\nx = 1\n")
     link = tmp_path / "link.py"
     link.symlink_to(target)
-    assert main([str(link)]) == 0
+    assert main(["format", str(link)]) == 0
     assert link.is_symlink()
     assert target.read_text() == "x = 1\n"
 
@@ -246,7 +246,7 @@ def test_cli_check_does_not_write(tmp_path, capsys):
     f = tmp_path / "a.py"
     src = "# gone\nx = 1\n"
     f.write_text(src)
-    assert main(["--check", str(f)]) == 1
+    assert main(["check", str(f)]) == 1
     assert f.read_text() == src
     assert str(f) in capsys.readouterr().out
 
@@ -254,14 +254,14 @@ def test_cli_check_does_not_write(tmp_path, capsys):
 def test_cli_check_clean_exits_zero(tmp_path):
     f = tmp_path / "a.py"
     f.write_text("x = 1\n")
-    assert main(["--check", str(f)]) == 0
+    assert main(["check", str(f)]) == 0
 
 
 def test_cli_diff_previews_without_writing(tmp_path, capsys):
     f = tmp_path / "a.py"
     src = "# gone\nx = 1\n"
     f.write_text(src)
-    assert main(["--diff", str(f)]) == 0
+    assert main(["format", "--diff", str(f)]) == 0
     out = capsys.readouterr().out
     assert "-# gone" in out
     assert f.read_text() == src
@@ -270,7 +270,7 @@ def test_cli_diff_previews_without_writing(tmp_path, capsys):
 def test_cli_keep_and_no_default_keeps(tmp_path):
     f = tmp_path / "a.py"
     f.write_text("# KEEP me\n# noqa: file-level\nx = 1\n")
-    assert main(["--keep", "KEEP", "--no-default-keeps", str(f)]) == 0
+    assert main(["format", "--keep", "KEEP", "--no-default-keeps", str(f)]) == 0
     assert f.read_text() == "# KEEP me\nx = 1\n"
 
 
@@ -278,7 +278,7 @@ def test_cli_bad_keep_regex_errors(tmp_path, capsys):
     f = tmp_path / "a.py"
     f.write_text("x = 1\n")
     with pytest.raises(SystemExit) as exc:
-        main(["--keep", "(", str(f)])
+        main(["format", "--keep", "(", str(f)])
     assert exc.value.code == 2
 
 
@@ -291,7 +291,7 @@ def test_cli_exclude_and_skip_dirs(tmp_path):
     (tmp_path / ".venv" / "lib").mkdir(parents=True)
     venved = tmp_path / ".venv" / "lib" / "c.py"
     venved.write_text("# stays\n")
-    assert main(["--exclude", "migrations", str(tmp_path)]) == 0
+    assert main(["format", "--exclude", "migrations", str(tmp_path)]) == 0
     assert (tmp_path / "pkg" / "a.py").read_text() == ""
     assert skipped.read_text() == "# stays\n"
     assert venved.read_text() == "# stays\n"
@@ -301,7 +301,7 @@ def test_cli_syntax_error_file_untouched(tmp_path, capsys):
     f = tmp_path / "bad.py"
     src = "def broken(:\n    # comment\n"
     f.write_text(src)
-    assert main([str(f)]) == 2
+    assert main(["format", str(f)]) == 2
     assert f.read_text() == src
     assert "skipped" in capsys.readouterr().err
 
@@ -310,7 +310,7 @@ def test_cli_non_utf8_roundtrip(tmp_path):
     f = tmp_path / "latin.py"
     raw = "# -*- coding: latin-1 -*-\n# gone\ns = 'caf\xe9'\n".encode("latin-1")
     f.write_bytes(raw)
-    assert main([str(f)]) == 0
+    assert main(["format", str(f)]) == 0
     assert (
         f.read_bytes()
         == "# -*- coding: latin-1 -*-\ns = 'caf\xe9'\n".encode("latin-1")
@@ -320,7 +320,7 @@ def test_cli_non_utf8_roundtrip(tmp_path):
 def test_cli_utf8_bom_preserved(tmp_path):
     f = tmp_path / "bom.py"
     f.write_bytes("\ufeff# gone\nx = 1\n".encode("utf-8"))
-    assert main([str(f)]) == 0
+    assert main(["format", str(f)]) == 0
     assert f.read_bytes() == "\ufeffx = 1\n".encode("utf-8")
 
 
@@ -328,7 +328,7 @@ def test_cli_lone_cr_file_skipped(tmp_path):
     f = tmp_path / "mac.py"
     raw = b"# c\rx = 1\r"
     f.write_bytes(raw)
-    assert main([str(f)]) == 2
+    assert main(["format", str(f)]) == 2
     assert f.read_bytes() == raw
 
 
@@ -339,7 +339,7 @@ def test_cli_verification_failure_leaves_file_untouched(
     src = "# gone\nx = 1\n"
     f.write_text(src)
     monkeypatch.setattr(_cli, "strip_source", lambda *a, **k: "y = 2\n")
-    assert main([str(f)]) == 2
+    assert main(["format", str(f)]) == 2
     assert f.read_text() == src
     assert "verification failed" in capsys.readouterr().err
 
@@ -353,12 +353,12 @@ def test_cli_engine_crash_leaves_file_untouched(tmp_path, monkeypatch):
         raise RuntimeError("engine bug")
 
     monkeypatch.setattr(_cli, "strip_source", boom)
-    assert main([str(f)]) == 2
+    assert main(["format", str(f)]) == 2
     assert f.read_text() == src
 
 
 def test_cli_missing_path(tmp_path, capsys):
-    assert main([str(tmp_path / "nope.py")]) == 2
+    assert main(["format", str(tmp_path / "nope.py")]) == 2
     assert "no such file" in capsys.readouterr().err
 
 
@@ -366,7 +366,7 @@ def test_cli_preserves_file_mode(tmp_path):
     f = tmp_path / "exec.py"
     f.write_text("#!/usr/bin/env python\n# gone\nx = 1\n")
     f.chmod(0o755)
-    assert main([str(f)]) == 0
+    assert main(["format", str(f)]) == 0
     assert f.stat().st_mode & 0o777 == 0o755
     assert f.read_text() == "#!/usr/bin/env python\nx = 1\n"
 
@@ -375,7 +375,7 @@ def test_cli_config_discovered_from_pyproject(tmp_path, capsys):
     (tmp_path / "pyproject.toml").write_text('[tool.censor]\nmode = "all"\n')
     f = tmp_path / "a.py"
     f.write_text("x = 1  # gone\n")
-    assert main([str(tmp_path)]) == 0
+    assert main(["format", str(tmp_path)]) == 0
     assert f.read_text() == "x = 1\n"
 
 
@@ -387,7 +387,7 @@ def test_cli_config_discovery_stops_at_project_root(tmp_path):
     sub.mkdir()
     f = sub / "a.py"
     f.write_text("x = 1  # stays\n")
-    assert main([str(sub)]) == 0
+    assert main(["format", str(sub)]) == 0
     assert "# stays" in f.read_text()
 
 
@@ -397,7 +397,7 @@ def test_cli_flag_beats_config(tmp_path):
     )
     f = tmp_path / "a.py"
     f.write_text("x = 1  # gone\n")
-    assert main(["--all", str(f)]) == 0
+    assert main(["format", "--all", str(f)]) == 0
     assert f.read_text() == "x = 1\n"
 
 
@@ -407,7 +407,7 @@ def test_cli_config_keep_list_combines(tmp_path):
     )
     f = tmp_path / "a.py"
     f.write_text("# KEEP me\n# SPARE me\n# noqa: file-level\nx = 1\n")
-    assert main([str(tmp_path)]) == 0
+    assert main(["format", str(tmp_path)]) == 0
     assert f.read_text() == "# KEEP me\n# SPARE me\nx = 1\n"
 
 
@@ -415,7 +415,7 @@ def test_cli_flag_beats_config_keep_list(tmp_path):
     (tmp_path / "pyproject.toml").write_text('[tool.censor]\nkeep = ["NOPE"]\n')
     f = tmp_path / "a.py"
     f.write_text("# KEEP me\n# NOPE me\nx = 1\n")
-    assert main(["--keep", "KEEP", str(f)]) == 0
+    assert main(["format", "--keep", "KEEP", str(f)]) == 0
     assert f.read_text() == "# KEEP me\nx = 1\n"
 
 
@@ -423,7 +423,7 @@ def test_cli_isolated_ignores_config(tmp_path, capsys):
     (tmp_path / "pyproject.toml").write_text('[tool.censor]\nmode = "all"\n')
     f = tmp_path / "a.py"
     f.write_text("x = 1  # stays\n")
-    assert main(["--isolated", str(f)]) == 0
+    assert main(["format", "--isolated", str(f)]) == 0
     assert f.read_text() == "x = 1  # stays\n"
 
 
@@ -432,7 +432,7 @@ def test_cli_explicit_config_file(tmp_path):
     cfg.write_text('[tool.censor]\nmode = "all"\n')
     f = tmp_path / "a.py"
     f.write_text("x = 1  # gone\n")
-    assert main(["--config", str(cfg), str(f)]) == 0
+    assert main(["format", "--config", str(cfg), str(f)]) == 0
     assert f.read_text() == "x = 1\n"
 
 
@@ -441,7 +441,7 @@ def test_cli_config_bare_top_level_table_accepted(tmp_path):
     cfg.write_text('[censor]\nmode = "all"\n')
     f = tmp_path / "a.py"
     f.write_text("x = 1  # gone\n")
-    assert main(["--config", str(cfg), str(f)]) == 0
+    assert main(["format", "--config", str(cfg), str(f)]) == 0
     assert f.read_text() == "x = 1\n"
 
 
@@ -450,7 +450,7 @@ def test_cli_unknown_config_key_errors(tmp_path, capsys):
     f = tmp_path / "a.py"
     f.write_text("x = 1\n")
     with pytest.raises(SystemExit) as exc:
-        main([str(f)])
+        main(["format", str(f)])
     assert exc.value.code == 2
     err = capsys.readouterr().err
     assert ": mod" in err
@@ -464,7 +464,7 @@ def test_cli_wrong_typed_config_value_errors(tmp_path, capsys):
     f = tmp_path / "a.py"
     f.write_text("x = 1\n")
     with pytest.raises(SystemExit):
-        main([str(f)])
+        main(["format", str(f)])
     assert "must be a boolean" in capsys.readouterr().err
 
 
@@ -475,34 +475,114 @@ def test_cli_invalid_mode_in_config_errors(tmp_path, capsys):
     f = tmp_path / "a.py"
     f.write_text("x = 1\n")
     with pytest.raises(SystemExit):
-        main([str(f)])
+        main(["format", str(f)])
     assert "mode must be one of" in capsys.readouterr().err
 
 
 def test_cli_repeatable_keep_flags(tmp_path):
     f = tmp_path / "a.py"
     f.write_text("# A me\n# B me\n# C me\nx = 1\n")
-    assert main(["--keep", "A", "--keep", "B", str(f)]) == 0
+    assert main(["format", "--keep", "A", "--keep", "B", str(f)]) == 0
     assert f.read_text() == "# A me\n# B me\nx = 1\n"
 
 
 def test_cli_check_failure_prints_rerun_command(tmp_path, capsys):
     f = tmp_path / "a.py"
     f.write_text("# gone\nx = 1\n")
-    argv = ["--check", str(f)]
+    argv = ["check", str(f)]
     assert main(argv) == 1
     out = capsys.readouterr()
     assert "would strip comments from:" in out.out
-    assert "to fix, run: censor %s" % str(f) in out.err
+    assert "to fix, run: censor format %s" % str(f) in out.err
 
 
 def test_cli_check_rerun_command_drops_check_and_diff(tmp_path, capsys):
     f = tmp_path / "a.py"
     f.write_text("# gone\nx = 1\n")
-    assert main(["--diff", "--check", str(f)]) == 1
+    assert main(["check", "--diff", str(f)]) == 1
     err = capsys.readouterr().err
     assert "--check" not in err.splitlines()[1]
     assert "--diff" not in err.splitlines()[1]
+
+
+def test_cli_no_command_errors_without_writing(tmp_path, capsys):
+    f = tmp_path / "a.py"
+    src = "# gone\nx = 1\n"
+    f.write_text(src)
+    with pytest.raises(SystemExit) as exc:
+        main([str(f)])
+    assert exc.value.code == 2
+    assert f.read_text() == src
+    assert "no command given" in capsys.readouterr().err
+
+
+def test_cli_command_after_flags_is_hoisted(tmp_path):
+    f = tmp_path / "a.py"
+    f.write_text("# gone\nx = 1\n")
+    assert main(["--all", "format", str(f)]) == 0
+    assert f.read_text() == "x = 1\n"
+
+
+def test_cli_command_word_as_flag_value_is_not_hoisted(tmp_path):
+    f = tmp_path / "a.py"
+    f.write_text("# gone\nx = 1\n")
+    assert main(["--keep", "check", "format", str(f)]) == 0
+    assert f.read_text() == "x = 1\n"
+
+
+def test_cli_help_works_without_command():
+    with pytest.raises(SystemExit) as exc:
+        main(["-h"])
+    assert exc.value.code == 0
+
+
+def test_cli_strip_alias_formats_in_place(tmp_path):
+    f = tmp_path / "a.py"
+    f.write_text("# gone\nx = 1\n")
+    assert main(["strip", str(f)]) == 0
+    assert f.read_text() == "x = 1\n"
+
+
+def test_cli_format_check_does_not_write(tmp_path, capsys):
+    f = tmp_path / "a.py"
+    src = "# gone\nx = 1\n"
+    f.write_text(src)
+    assert main(["format", "--check", str(f)]) == 1
+    assert f.read_text() == src
+    assert "would strip comments from" in capsys.readouterr().out
+
+
+def test_cli_format_check_clean_exits_zero(tmp_path):
+    f = tmp_path / "a.py"
+    f.write_text("x = 1\n")
+    assert main(["format", "--check", str(f)]) == 0
+
+
+def test_cli_check_fix_rewrites(tmp_path):
+    f = tmp_path / "a.py"
+    f.write_text("# gone\nx = 1\n")
+    assert main(["check", "--fix", str(f)]) == 0
+    assert f.read_text() == "x = 1\n"
+
+
+def test_cli_check_diff_prints_and_exits_1_without_writing(tmp_path, capsys):
+    f = tmp_path / "a.py"
+    src = "# gone\nx = 1\n"
+    f.write_text(src)
+    assert main(["check", "--diff", str(f)]) == 1
+    out = capsys.readouterr()
+    assert "-# gone" in out.out
+    assert f.read_text() == src
+
+
+def test_cli_format_diff_prints_and_exits_0_without_writing(tmp_path, capsys):
+    f = tmp_path / "a.py"
+    src = "# gone\nx = 1\n"
+    f.write_text(src)
+    assert main(["format", "--diff", str(f)]) == 0
+    out = capsys.readouterr()
+    assert "-# gone" in out.out
+    assert f.read_text() == src
 
 
 def dv(src, n):
@@ -567,7 +647,7 @@ def test_doc_no_violation_at_exact_limit():
 def test_cli_max_doc_lines_composes_with_default_mode(tmp_path, capsys):
     f = tmp_path / "a.py"
     f.write_text('# gone\ndef f():\n    """a\n    b"""\n')
-    assert main([str(f)]) == 0
+    assert main(["format", str(f)]) == 0
     assert f.read_text() == 'def f():\n    """a\n    b"""\n'
     out, err = capsys.readouterr()
     assert "violations" not in err
@@ -576,13 +656,13 @@ def test_cli_max_doc_lines_composes_with_default_mode(tmp_path, capsys):
 def test_cli_max_doc_lines_reports_and_exits_1(tmp_path, capsys):
     f = tmp_path / "a.py"
     f.write_text('def f():\n    """a\n    b\n    c"""\n')
-    rc = main(["--max-doc-lines", "2", str(f)])
+    rc = main(["check", "--max-doc-lines", "2", str(f)])
     assert rc == 1
     out, err = capsys.readouterr()
     assert "%s:2: docstring of 'f' has 3 lines (limit 2)" % f in out
     assert "1 docstring violations" in err
     assert f.read_text() == 'def f():\n    """a\n    b\n    c"""\n'
-    assert main(["--max-doc-lines", "5", str(f)]) == 0
+    assert main(["check", "--max-doc-lines", "5", str(f)]) == 0
 
 
 def test_cli_max_doc_lines_invalid_value_rejected(capsys):

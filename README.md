@@ -4,9 +4,9 @@ Delete comments — and optionally docstrings — from a Python codebase.
 Fast, and built so it provably cannot touch anything that isn't a comment.
 
 ```console
-$ uvx censor path/to/project          # strip own-line comments, in place
-$ censor --check src/                 # CI gate: exit 1 if anything would change
-$ censor --diff --docstrings pkg/     # preview without writing
+$ censor format path/to/project       # strip own-line comments, in place
+$ censor check src/                   # CI gate: exit 1 if anything would change
+$ censor check --diff --docstrings pkg/   # preview without writing
 ```
 
 Zero runtime dependencies, pure stdlib, Python 3.11+.
@@ -65,11 +65,23 @@ modes must verify and be idempotent on every file.
 
 ## CLI
 
-```text
-censor PATH... [--docstrings | --all] [options]
+censor uses two subcommands, so the invocations you already know from
+`ruff` and `black` do what you'd expect:
 
-  --diff                print unified diffs instead of writing
-  --check               write nothing; exit 1 if any file would change
+```text
+censor check PATH... [--fix] [--docstrings | --all] [options]
+censor format PATH... [--check] [--docstrings | --all] [options]
+```
+
+- `check` reports what would change and never writes; add `--fix`
+  (ruff-style) to rewrite in place. Exits 1 if anything would change.
+- `format` (alias `strip`) rewrites in place (black-style); add
+  `--check` to only report instead.
+
+Shared options:
+
+```text
+  --diff                print unified diffs instead of writing (never writes)
   --max-doc-lines N     report docstrings longer than N content lines; exit 1
                         if any (composes with every mode)
   --keep REGEX          also keep comments matching REGEX (repeatable)
@@ -82,6 +94,9 @@ censor PATH... [--docstrings | --all] [options]
                         of discovering one
   --isolated            ignore any pyproject.toml configuration
 ```
+
+Running `censor` without a command is a usage error (exit 2); nothing is
+written.
 
 ## Configuration
 
@@ -104,16 +119,16 @@ a normal pyproject or carry a bare top-level `[censor]` table), or
 `--isolated` to ignore configuration entirely.
 
 Precedence follows the black convention: **configuration supplies defaults;
-any explicit CLI flag wins outright** (`check`, `diff`, `jobs` and paths are
-CLI-only and cannot be set in the file).
+any explicit CLI flag wins outright** (`check`, `format`, `diff`, `jobs` and
+paths are CLI-only and cannot be set in the file).
 
 ## CI gate
 
 ```console
-$ censor --check src/
+$ censor check src/
 would strip comments from: src/pkg/mod.py
 censor: 1 files contain comments censor would delete.
-censor: to fix, run: censor src/
+censor: to fix, run: censor format src/
 censor: (rewrites in place; run with --diff first to preview the deletions)
 $ echo $?
 1
@@ -123,14 +138,14 @@ Directories are searched recursively for `*.py`; `.git`, `.venv`, `venv`,
 `__pycache__`, `build`, `dist`, `.tox`, `.nox`, `.eggs` and common tool
 caches are skipped. Explicitly named files are processed as-is.
 
-Exit codes: `0` success, `1` changes needed (`--check`, or docstring
+Exit codes: `0` success, `1` changes needed (`censor check` without `--fix`, `censor format --check`, or docstring
 violations from `--max-doc-lines`), `2` any file skipped or failed (every
 such file is listed on stderr, and left untouched).
 
 ## Docstring length cap
 
 ```console
-$ censor --check --max-doc-lines 20 src/   # CI gate for oversized docstrings
+$ censor check --max-doc-lines 20 src/   # CI gate for oversized docstrings
 ```
 
 `--max-doc-lines N` reports every module/class/function docstring whose

@@ -1,20 +1,9 @@
 """The stripping engine and its safety gate.
-
-Design rules that make the tool provably safe:
-
-* The source is only ever edited by deleting whole physical lines, or by
-  cutting a line at the start column of a trailing comment.  Code is never
-  regenerated, so the formatting, string contents, escapes and line endings
-  of every surviving line are byte-for-byte identical to the input.
-* Physical lines are obtained by splitting on ``"\n"`` only (the same view
-  the tokenizer's ``readline`` has) — ``str.splitlines()`` would also split
-  on form feeds, ``\\u2028`` etc. and desynchronise our indices from the
-  token and AST line numbers.
-* Every edit is checked by :func:`verify`, which recomputes equivalence from
-  scratch: comment modes compare the significant token streams of input and
-  output, docstring mode compares ASTs after normalising the removed
-  docstrings out of the input.  Callers must refuse to persist any result
-  that does not verify.
+The source is only ever edited by deleting whole physical lines, or by
+cutting a line at the start column of a trailing comment: code is never
+regenerated, so every surviving line is byte-for-byte identical to the
+input. Physical lines split on ``"\\n"`` only (the tokenizer's view).
+Every edit is checked by :func:`verify`; refuse to persist unverified results.
 """
 
 from __future__ import annotations
@@ -126,13 +115,11 @@ def strip_source(
 ) -> str:
     """Return *src* with comments (and docstrings, per *mode*) deleted.
 
-    Shebang and PEP 263 coding lines are always preserved; comments matching
-    :data:`DEFAULT_KEEPS` (unless ``default_keeps=False``) or *keep* are too.
-
-    Raises :class:`SyntaxError`/:class:`tokenize.TokenError` when *src*
-    cannot be tokenized (or, in :attr:`Mode.DOCSTRINGS`, parsed).  The result
-    is not guaranteed safe by itself — run it through :func:`verify` before
-    persisting it anywhere.
+    Shebang and PEP 263 coding lines always survive, as do comments
+    matching :data:`DEFAULT_KEEPS` (unless ``default_keeps=False``) or
+    *keep*. Raises SyntaxError/tokenize.TokenError when *src* cannot be
+    tokenized (or, in DOCSTRINGS mode, parsed); run the result through
+    :func:`verify` before persisting it anywhere.
     """
     if not isinstance(mode, Mode):
         mode = Mode(mode)
