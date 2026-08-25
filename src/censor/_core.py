@@ -9,11 +9,11 @@ Every edit is checked by :func:`verify`; refuse to persist unverified results.
 from __future__ import annotations
 
 import ast
-import enum
 import io
 import re
 import tokenize
 from typing import Dict
+from typing import Iterable
 from typing import List
 from typing import NamedTuple
 from typing import Optional
@@ -22,7 +22,11 @@ from typing import Set
 from typing import Tuple
 
 __all__ = [
-    "Mode",
+    "OWN_LINE",
+    "TRAILING",
+    "DOCSTRINGS",
+    "ALL_TARGETS",
+    "TARGETS",
     "strip_source",
     "verify",
     "DEFAULT_KEEPS",
@@ -31,12 +35,11 @@ __all__ = [
 ]
 
 
-class Mode(enum.Enum):
-    """What gets deleted."""
-
-    OWN_LINE = "own-line"
-    DOCSTRINGS = "docstrings"
-    ALL = "all"
+OWN_LINE = "own-line"
+TRAILING = "trailing"
+DOCSTRINGS = "docstrings"
+ALL_TARGETS = frozenset({OWN_LINE, TRAILING})
+TARGETS = frozenset({OWN_LINE, TRAILING, DOCSTRINGS})
 
 
 DEFAULT_KEEPS: "Pattern[str]" = re.compile(
@@ -73,15 +76,17 @@ def _kept(
 
 
 def _deletable_docstrings(
-    lines: List[str], tree: ast.Module
+    lines: List[str], tree: ast.Module, trailing_ok: bool = False
 ) -> "List[Tuple[ast.stmt, ast.Expr, bool]]":
     """Docstrings whose physical lines contain nothing but the docstring.
 
     Returns ``(owner, docstring_stmt, sole)`` triples; *sole* means the
     docstring is the entire body of a class or function, so deleting it
     requires a ``pass`` in its place.  Docstrings that share a line with
-    other code (``def f(): "doc"``) or a trailing comment are left alone —
-    partial-line edits of statements are never attempted.
+    other code (``def f(): "doc"``) are left alone — partial-line edits
+    of statements are never attempted.  With *trailing_ok*, a trailing
+    comment after the docstring counts as empty, matching what the
+    trailing-comment pass removes.
     """
     found = []
     for node in ast.walk(tree):
@@ -99,30 +104,50 @@ def _deletable_docstrings(
             continue
         if lines[doc.lineno - 1][: doc.col_offset].strip():
             continue
-        if lines[doc.end_lineno - 1][doc.end_col_offset :].strip():
+        residue = lines[doc.end_lineno - 1][doc.end_col_offset :]
+        if residue.strip() and not (
+            trailing_ok and residue.lstrip().startswith("#")
+        ):
             continue
         sole = len(body) == 1 and not isinstance(node, ast.Module)
         found.append((node, doc, sole))
     return found
 
 
+def _normalise_targets(targets: "Iterable[str]") -> frozenset:
+    selected = frozenset(targets)
+    unknown = selected - TARGETS
+    if unknown:
+        raise ValueError(
+            "unknown target%s: %s; valid targets are: %s"
+            % (
+                "s" if len(unknown) != 1 else "",
+                ", ".join(sorted(unknown)),
+                ", ".join(sorted(TARGETS)),
+            )
+        )
+    return selected
+
+
 def strip_source(
     src: str,
-    mode: Mode = Mode.OWN_LINE,
+    targets: "Iterable[str]" = ALL_TARGETS,
     keep: "Optional[Pattern[str]]" = None,
     *,
     default_keeps: bool = True,
 ) -> str:
-    """Return *src* with comments (and docstrings, per *mode*) deleted.
+    """Return *src* with the selected comment categories deleted.
 
-    Shebang and PEP 263 coding lines always survive, as do comments
-    matching :data:`DEFAULT_KEEPS` (unless ``default_keeps=False``) or
-    *keep*. Raises SyntaxError/tokenize.TokenError when *src* cannot be
-    tokenized (or, in DOCSTRINGS mode, parsed); run the result through
+    *targets* is an iterable of category names (see :data:`TARGETS`);
+    docstrings are deleted only when ``DOCSTRINGS`` is selected. Shebang
+    and PEP 263 coding lines always survive, as do comments matching
+    :data:`DEFAULT_KEEPS` (unless ``default_keeps=False``) or *keep*.
+    Raises ValueError on unknown category names, and
+    SyntaxError/tokenize.TokenError when *src* cannot be tokenized (or
+    parsed when DOCSTRINGS is selected); run the result through
     :func:`verify` before persisting it anywhere.
     """
-    if not isinstance(mode, Mode):
-        mode = Mode(mode)
+    selected = _normalise_targets(targets)
     lines = _physical_lines(src)
     delete: Set[int] = set()
     replace: Dict[int, str] = {}
@@ -132,13 +157,17 @@ def strip_source(
         row, col = tok.start
         line = lines[row - 1]
         if not line[:col].strip():
-            delete.add(row - 1)
-        elif mode is Mode.ALL:
+            if OWN_LINE in selected:
+                delete.add(row - 1)
+        elif TRAILING in selected:
             replace[row - 1] = line[:col].rstrip() + line[tok.end[1] :]
-    if mode is Mode.DOCSTRINGS:
-        for _owner, doc, sole in _deletable_docstrings(lines, ast.parse(src)):
+    if DOCSTRINGS in selected:
+        for _owner, doc, sole in _deletable_docstrings(
+            lines, ast.parse(src), TRAILING in selected
+        ):
             first, last = doc.lineno - 1, doc.end_lineno - 1
             delete.update(range(first, last + 1))
+            replace.pop(last, None)
             if sole:
                 indent = lines[first][: doc.col_offset]
                 ending = lines[last][len(lines[last].rstrip("\r\n")) :]
@@ -221,20 +250,22 @@ def _significant_tokens(src: str) -> "List[Tuple[int, str]]":
     return sig
 
 
-def verify(src: str, stripped: str, mode: Mode = Mode.OWN_LINE) -> bool:
+def verify(
+    src: str, stripped: str, targets: "Iterable[str]" = ALL_TARGETS
+) -> bool:
     """Recompute, from scratch, that *stripped* is equivalent to *src*.
 
-    Comment modes compare the token streams with COMMENT/NL filtered out —
-    equality implies the compiler sees identical programs, at a fraction of
-    the cost of parsing.  Docstring mode parses both sides and compares
-    ``ast.dump`` after normalising the removed docstrings out of *src*.
+    Comment deletions are verified by comparing the token streams with
+    COMMENT/NL filtered out — equality implies the compiler sees identical
+    programs, at a fraction of the cost of parsing. When DOCSTRINGS is
+    selected, both sides are parsed and ``ast.dump`` compared after
+    normalising the removed docstrings out of *src*.
     """
-    if not isinstance(mode, Mode):
-        mode = Mode(mode)
-    if mode is Mode.DOCSTRINGS:
+    selected = _normalise_targets(targets)
+    if DOCSTRINGS in selected:
         tree = ast.parse(src)
         for owner, doc, sole in _deletable_docstrings(
-            _physical_lines(src), tree
+            _physical_lines(src), tree, TRAILING in selected
         ):
             owner.body.remove(doc)
             if sole:

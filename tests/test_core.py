@@ -3,25 +3,38 @@ import textwrap
 
 import pytest
 
-from censor import Mode
+from censor import ALL_TARGETS
+from censor import DOCSTRINGS
+from censor import OWN_LINE
+from censor import TRAILING
 from censor import _cli
 from censor import strip_source
 from censor import verify
 from censor._cli import main
 
+COMMENTS = frozenset({OWN_LINE, TRAILING})
+EVERYTHING = frozenset({OWN_LINE, TRAILING, DOCSTRINGS})
 
-def strip(src, mode=Mode.OWN_LINE, **kw):
-    out = strip_source(src, mode, **kw)
-    assert verify(src, out, mode), "stripped output failed verification"
+
+def strip(src, targets=ALL_TARGETS, **kw):
+    out = strip_source(src, targets, **kw)
+    assert verify(src, out, targets), "stripped output failed verification"
     return out
 
 
-def test_own_line_deleted_trailing_kept():
+def test_default_deletes_both_comment_kinds():
     src = "# banner\nx = 1  # trailing\n    # indented\ny = 2\n"
-    assert strip(src) == "x = 1  # trailing\ny = 2\n"
+    assert strip(src) == "x = 1\ny = 2\n"
 
 
-def test_own_line_inside_multiline_expression():
+def test_own_line_only_selection_keeps_trailing_comments():
+    src = "# banner\nx = 1  # trailing\n    # indented\ny = 2\n"
+    out = strip(src, {OWN_LINE})
+    assert out == "x = 1  # trailing\ny = 2\n"
+    assert strip(out, {TRAILING}) == "x = 1\ny = 2\n"
+
+
+def test_comment_inside_multiline_expression():
     src = textwrap.dedent("""\
         x = [
             1,  # one
@@ -29,8 +42,9 @@ def test_own_line_inside_multiline_expression():
             2,
         ]
         """)
-    expected = "x = [\n    1,  # one\n    2,\n]\n"
+    expected = "x = [\n    1,\n    2,\n]\n"
     assert strip(src) == expected
+    assert strip(src, {OWN_LINE}) == "x = [\n    1,  # one\n    2,\n]\n"
 
 
 def test_comment_only_file_becomes_empty():
@@ -50,7 +64,8 @@ def test_own_line_comment_at_eof_without_newline():
 
 def test_crlf_line_endings_preserved():
     src = "# gone\r\nx = 1  # kept\r\nif x:\r\n    # gone too\r\n    y = 2\r\n"
-    assert strip(src) == "x = 1  # kept\r\nif x:\r\n    y = 2\r\n"
+    assert strip(src) == "x = 1\r\nif x:\r\n    y = 2\r\n"
+    assert strip(src, {OWN_LINE}) == "x = 1  # kept\r\nif x:\r\n    y = 2\r\n"
 
 
 def test_form_feed_does_not_desync_lines():
@@ -58,22 +73,27 @@ def test_form_feed_does_not_desync_lines():
     assert strip(src) == "x = 1\ny = 2\n"
 
 
-def test_all_removes_trailing_comment_and_padding():
+def test_default_truncates_trailing_comment():
     src = "x = 1    # trailing\n# own\ny = 2\n"
-    assert strip(src, Mode.ALL) == "x = 1\ny = 2\n"
+    assert strip(src) == "x = 1\ny = 2\n"
 
 
-def test_all_trailing_comment_at_eof_without_newline():
-    assert strip("x = 1  # c", Mode.ALL) == "x = 1"
+def test_delete_own_line_only_leaves_trailing_comments():
+    src = "x = 1    # trailing\n# own\ny = 2\n"
+    assert strip(src, {OWN_LINE}) == "x = 1    # trailing\ny = 2\n"
 
 
-def test_all_keeps_crlf_of_edited_line():
-    assert strip("x = 1  # c\r\ny = 2\r\n", Mode.ALL) == "x = 1\r\ny = 2\r\n"
+def test_trailing_truncated_at_eof_without_newline():
+    assert strip("x = 1  # c", ALL_TARGETS) == "x = 1"
 
 
-def test_all_comment_after_open_bracket():
+def test_trailing_keeps_crlf_of_edited_line():
+    assert strip("x = 1  # c\r\ny = 2\r\n", ALL_TARGETS) == "x = 1\r\ny = 2\r\n"
+
+
+def test_trailing_comment_after_open_bracket():
     src = "foo = dict(  # opening\n    a=1,\n)\n"
-    assert strip(src, Mode.ALL) == "foo = dict(\n    a=1,\n)\n"
+    assert strip(src, ALL_TARGETS) == "foo = dict(\n    a=1,\n)\n"
 
 
 def test_docstrings_removed_everywhere():
@@ -97,7 +117,7 @@ def test_docstrings_removed_everywhere():
         async def f():
             """Async docstring."""
         ''')
-    out = strip(src, Mode.DOCSTRINGS)
+    out = strip(src, EVERYTHING)
     assert '"""' not in out
     assert "# comment" not in out
     assert "class C:\n\n    def method(self):\n        return os" in out
@@ -105,46 +125,64 @@ def test_docstrings_removed_everywhere():
 
 
 def test_sole_docstring_module_gets_no_pass():
-    assert strip('"""Only a docstring."""\n', Mode.DOCSTRINGS) == ""
+    assert strip('"""Only a docstring."""\n', EVERYTHING) == ""
 
 
 def test_sole_docstring_class_and_def_get_pass():
     src = 'class C:\n    """Doc."""\n'
-    assert strip(src, Mode.DOCSTRINGS) == "class C:\n    pass\n"
+    assert strip(src, EVERYTHING) == "class C:\n    pass\n"
     src = 'def f():\n    """Doc.\n\n    More.\n    """\n'
-    assert strip(src, Mode.DOCSTRINGS) == "def f():\n    pass\n"
+    assert strip(src, EVERYTHING) == "def f():\n    pass\n"
+
+
+def test_docstrings_only_selection_leaves_comments():
+    src = '# gone nowhere\nx = 1  # trailing\ndef f():\n    """Doc."""\n'
+    assert strip(src, {DOCSTRINGS}) == (
+        "# gone nowhere\nx = 1  # trailing\ndef f():\n    pass\n"
+    )
 
 
 def test_pass_line_keeps_crlf():
     src = 'def f():\r\n    """Doc."""\r\n'
-    assert strip(src, Mode.DOCSTRINGS) == "def f():\r\n    pass\r\n"
+    assert strip(src, EVERYTHING) == "def f():\r\n    pass\r\n"
+
+
+def test_docstring_end_line_with_trailing_comment_is_deleted():
+    src = '"""doc"""\nx = 1\n'
+    assert strip(src, EVERYTHING) == "x = 1\n"
+    src = '"""doc"""#"\nx = 1\n'
+    out = strip(src, EVERYTHING)
+    assert verify(src, out, EVERYTHING)
+    assert strip(out, EVERYTHING) == out
 
 
 def test_docstring_sharing_a_line_with_code_is_kept():
     src = 'def f(): "doc"\n'
-    assert strip(src, Mode.DOCSTRINGS) == src
+    assert strip(src, EVERYTHING) == src
     src = 'def f():\n    "doc"; x = 1\n'
-    assert strip(src, Mode.DOCSTRINGS) == src
+    assert strip(src, EVERYTHING) == src
 
 
-def test_docstring_with_trailing_comment_is_kept():
+def test_docstring_with_trailing_comment():
     src = 'def f():\n    """doc"""  # trailing\n    return 1\n'
-    assert strip(src, Mode.DOCSTRINGS) == src
+    assert strip(src, {DOCSTRINGS}) == src
+    assert strip(src, EVERYTHING) == "def f():\n    return 1\n"
+    assert strip(src, COMMENTS) == 'def f():\n    """doc"""\n    return 1\n'
 
 
-def test_docstrings_mode_keeps_trailing_comments():
+def test_docstrings_selection_keeps_comments():
     src = "x = 1  # trailing\ny = 2\n"
-    assert strip(src, Mode.DOCSTRINGS) == src
+    assert strip(src, {DOCSTRINGS}) == src
 
 
 def test_non_docstring_string_statement_untouched():
     src = 'x = 1\n"""just a string in the middle."""\ny = 2\n'
-    assert strip(src, Mode.DOCSTRINGS) == src
+    assert strip(src, EVERYTHING) == src
 
 
 def test_fstring_first_statement_is_not_a_docstring():
     src = 'f"""not a docstring {1}"""\nx = 1\n'
-    assert strip(src, Mode.DOCSTRINGS) == src
+    assert strip(src, EVERYTHING) == src
 
 
 SHEBANG_SRC = (
@@ -152,9 +190,9 @@ SHEBANG_SRC = (
 )
 
 
-@pytest.mark.parametrize("mode", list(Mode))
-def test_shebang_and_coding_survive_every_mode(mode):
-    out = strip(SHEBANG_SRC, mode, default_keeps=False)
+@pytest.mark.parametrize("targets", [ALL_TARGETS, frozenset({OWN_LINE})])
+def test_shebang_and_coding_survive_every_target(targets):
+    out = strip(SHEBANG_SRC, targets, default_keeps=False)
     assert out.startswith("#!/usr/bin/env python\n# -*- coding: utf-8 -*-\n")
     assert "# normal" not in out
 
@@ -175,18 +213,18 @@ def test_shebang_and_coding_survive_every_mode(mode):
         "# pragma: no cover",
     ],
 )
-def test_default_pragmas_kept_even_in_all_mode(pragma):
+def test_default_pragmas_kept_even_when_trailing_selected(pragma):
     src = "x = 1  %s\n" % pragma
-    assert strip(src, Mode.ALL) == src
+    assert strip(src, ALL_TARGETS) == src
 
 
 def test_pragma_lookalikes_are_deleted():
-    assert strip("x = 1  # noqasaurus\n", Mode.ALL) == "x = 1\n"
+    assert strip("x = 1  # noqasaurus\n", ALL_TARGETS) == "x = 1\n"
 
 
 def test_no_default_keeps_deletes_pragmas():
     src = "x = 1  # noqa\n# fmt: off\n"
-    assert strip(src, Mode.ALL, default_keeps=False) == "x = 1\n"
+    assert strip(src, ALL_TARGETS, default_keeps=False) == "x = 1\n"
 
 
 def test_keep_regex():
@@ -197,38 +235,79 @@ def test_keep_regex():
 
 def test_verify_rejects_code_deletion():
     src = "x = 1\ny = 2\n"
-    assert not verify(src, "x = 1\n", Mode.OWN_LINE)
-    assert not verify(src, "x = 1\n", Mode.DOCSTRINGS)
+    assert not verify(src, "x = 1\n", {OWN_LINE})
+    assert not verify(src, "x = 1\n", EVERYTHING)
 
 
 def test_verify_rejects_code_mutation():
-    assert not verify("x = 1\n", "x = 2\n", Mode.OWN_LINE)
+    assert not verify("x = 1\n", "x = 2\n", {OWN_LINE})
 
 
 def test_verify_accepts_comment_deletion_only():
     src = "# c\nx = 1\n"
-    assert verify(src, "x = 1\n", Mode.OWN_LINE)
+    assert verify(src, "x = 1\n", {OWN_LINE})
+
+
+def test_unknown_target_raises_value_error():
+    with pytest.raises(ValueError):
+        strip_source("x = 1\n", {"inline"})
+    with pytest.raises(ValueError):
+        verify("x = 1\n", "x = 1\n", {"inline"})
 
 
 def test_idempotent():
     src = SHEBANG_SRC + 'def f():\n    """doc"""\n    # inner\n    return 1\n'
-    for mode in Mode:
-        once = strip(src, mode)
-        assert strip(once, mode) == once
+    for targets in (ALL_TARGETS, COMMENTS, EVERYTHING):
+        once = strip(src, targets)
+        assert strip(once, targets) == once
+
+
+def test_cli_default_truncates_trailing_comment(tmp_path):
+    f = tmp_path / "a.py"
+    f.write_text('x = f("--branch",  # note\n    1,\n)\n')
+    assert main(["format", str(f)]) == 0
+    assert f.read_text() == 'x = f("--branch",\n    1,\n)\n'
+
+
+def test_cli_skip_trailing_keeps_them(tmp_path):
+    f = tmp_path / "a.py"
+    f.write_text("# gone\nx = 1  # stays\n")
+    assert main(["format", "--skip", "trailing", str(f)]) == 0
+    assert f.read_text() == "x = 1  # stays\n"
+
+
+def test_cli_delete_docstrings_only(tmp_path):
+    f = tmp_path / "a.py"
+    src = '# stays\ndef f():\n    """Doc."""\n'
+    f.write_text(src)
+    assert main(["format", "--delete", "docstrings", str(f)]) == 0
+    assert f.read_text() == "# stays\ndef f():\n    pass\n"
 
 
 def test_cli_default_strips_in_place(tmp_path, capsys):
     f = tmp_path / "a.py"
-    f.write_text("# gone\nx = 1  # stays\n")
+    f.write_text("# gone\nx = 1  # also gone\n")
     assert main(["format", str(tmp_path)]) == 0
-    assert f.read_text() == "x = 1  # stays\n"
+    assert f.read_text() == "x = 1\n"
     assert "1 changed" in capsys.readouterr().err
 
 
-def test_cli_all_mode(tmp_path):
+def test_cli_delete_flag(tmp_path):
     f = tmp_path / "a.py"
     f.write_text("x = 1  # gone\n")
-    assert main(["format", "--all", str(f)]) == 0
+    assert (
+        main(
+            [
+                "format",
+                "--delete",
+                "own-line",
+                "--delete",
+                "trailing",
+                str(f),
+            ]
+        )
+        == 0
+    )
     assert f.read_text() == "x = 1\n"
 
 
@@ -372,7 +451,9 @@ def test_cli_preserves_file_mode(tmp_path):
 
 
 def test_cli_config_discovered_from_pyproject(tmp_path, capsys):
-    (tmp_path / "pyproject.toml").write_text('[tool.censor]\nmode = "all"\n')
+    (tmp_path / "pyproject.toml").write_text(
+        '[tool.censor]\ndelete = ["own-line", "trailing"]\n'
+    )
     f = tmp_path / "a.py"
     f.write_text("x = 1  # gone\n")
     assert main(["format", str(tmp_path)]) == 0
@@ -380,24 +461,38 @@ def test_cli_config_discovered_from_pyproject(tmp_path, capsys):
 
 
 def test_cli_config_discovery_stops_at_project_root(tmp_path):
-    (tmp_path / "pyproject.toml").write_text('[tool.censor]\nmode = "all"\n')
+    (tmp_path / "pyproject.toml").write_text(
+        '[tool.censor]\ndelete = ["own-line"]\n'
+    )
     proj = tmp_path / "proj"
     (proj / ".git").mkdir(parents=True)
     sub = proj / "sub"
     sub.mkdir()
     f = sub / "a.py"
-    f.write_text("x = 1  # stays\n")
+    f.write_text("# gone\nx = 1  # gone too\n")
     assert main(["format", str(sub)]) == 0
-    assert "# stays" in f.read_text()
+    assert f.read_text() == "x = 1\n"
 
 
 def test_cli_flag_beats_config(tmp_path):
     (tmp_path / "pyproject.toml").write_text(
-        '[tool.censor]\nmode = "own-line"\n'
+        '[tool.censor]\ndelete = ["own-line"]\n'
     )
     f = tmp_path / "a.py"
     f.write_text("x = 1  # gone\n")
-    assert main(["format", "--all", str(f)]) == 0
+    assert (
+        main(
+            [
+                "format",
+                "--delete",
+                "own-line",
+                "--delete",
+                "trailing",
+                str(f),
+            ]
+        )
+        == 0
+    )
     assert f.read_text() == "x = 1\n"
 
 
@@ -420,16 +515,18 @@ def test_cli_flag_beats_config_keep_list(tmp_path):
 
 
 def test_cli_isolated_ignores_config(tmp_path, capsys):
-    (tmp_path / "pyproject.toml").write_text('[tool.censor]\nmode = "all"\n')
+    (tmp_path / "pyproject.toml").write_text(
+        '[tool.censor]\nskip = ["trailing"]\n'
+    )
     f = tmp_path / "a.py"
     f.write_text("x = 1  # stays\n")
     assert main(["format", "--isolated", str(f)]) == 0
-    assert f.read_text() == "x = 1  # stays\n"
+    assert f.read_text() == "x = 1\n"
 
 
 def test_cli_explicit_config_file(tmp_path):
     cfg = tmp_path / "other-pyproject.toml"
-    cfg.write_text('[tool.censor]\nmode = "all"\n')
+    cfg.write_text('[tool.censor]\ndelete = ["own-line", "trailing"]\n')
     f = tmp_path / "a.py"
     f.write_text("x = 1  # gone\n")
     assert main(["format", "--config", str(cfg), str(f)]) == 0
@@ -438,7 +535,7 @@ def test_cli_explicit_config_file(tmp_path):
 
 def test_cli_config_bare_top_level_table_accepted(tmp_path):
     cfg = tmp_path / "censor-only.toml"
-    cfg.write_text('[censor]\nmode = "all"\n')
+    cfg.write_text('[censor]\ndelete = ["own-line", "trailing"]\n')
     f = tmp_path / "a.py"
     f.write_text("x = 1  # gone\n")
     assert main(["format", "--config", str(cfg), str(f)]) == 0
@@ -468,15 +565,24 @@ def test_cli_wrong_typed_config_value_errors(tmp_path, capsys):
     assert "must be a boolean" in capsys.readouterr().err
 
 
-def test_cli_invalid_mode_in_config_errors(tmp_path, capsys):
+def test_cli_invalid_skip_entry_in_config_errors(tmp_path, capsys):
     (tmp_path / "pyproject.toml").write_text(
-        '[tool.censor]\nmode = "aggressive"\n'
+        '[tool.censor]\nskip = ["aggressive"]\n'
     )
     f = tmp_path / "a.py"
     f.write_text("x = 1\n")
     with pytest.raises(SystemExit):
         main(["format", str(f)])
-    assert "mode must be one of" in capsys.readouterr().err
+    assert "skip entries must be one of" in capsys.readouterr().err
+
+
+def test_cli_empty_selection_errors(tmp_path, capsys):
+    f = tmp_path / "a.py"
+    f.write_text("x = 1\n")
+    with pytest.raises(SystemExit) as exc:
+        main(["format", "--skip", "own-line", "--skip", "trailing", str(f)])
+    assert exc.value.code == 2
+    assert "nothing to delete" in capsys.readouterr().err
 
 
 def test_cli_repeatable_keep_flags(tmp_path):
@@ -519,7 +625,7 @@ def test_cli_no_command_errors_without_writing(tmp_path, capsys):
 def test_cli_command_after_flags_is_hoisted(tmp_path):
     f = tmp_path / "a.py"
     f.write_text("# gone\nx = 1\n")
-    assert main(["--all", "format", str(f)]) == 0
+    assert main(["--delete", "own-line", "format", str(f)]) == 0
     assert f.read_text() == "x = 1\n"
 
 

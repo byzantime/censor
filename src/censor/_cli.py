@@ -25,7 +25,8 @@ from typing import Optional
 from typing import Sequence
 from typing import Tuple
 
-from censor._core import Mode
+from censor._core import ALL_TARGETS
+from censor._core import TARGETS
 from censor._core import docstring_violations
 from censor._core import strip_source
 from censor._core import verify
@@ -57,7 +58,8 @@ FAILED = "failed"  # verification refused the result; left untouched
 PROJECT_ROOT_MARKERS = frozenset({".git", ".hg"})
 
 CONFIG_KEYS = {
-    "mode": str,
+    "delete": list,
+    "skip": list,
     "keep": list,
     "default-keeps": bool,
     "exclude": list,
@@ -167,12 +169,19 @@ def _validate_config(
                     value,
                 )
             )
-        if key == "mode" and value not in tuple(m.value for m in Mode):
-            parser.error(
-                "%s: [tool.censor] mode must be one of: %s"
-                % (source, ", ".join(m.value for m in Mode))
-            )
-        if key in ("keep", "exclude"):
+        if key in ("delete", "skip"):
+            bad = sorted(set(value) - TARGETS)
+            if bad:
+                parser.error(
+                    "%s: [tool.censor] %s entries must be one of: %s (got %s)"
+                    % (
+                        source,
+                        key,
+                        ", ".join(sorted(TARGETS)),
+                        ", ".join(bad),
+                    )
+                )
+        if key in ("keep", "exclude", "delete", "skip"):
             _validate_list_key(key, value, source, parser)
     return table
 
@@ -235,7 +244,7 @@ def _atomic_write(path: str, data: bytes) -> None:
 
 
 class _Config(NamedTuple):
-    mode: str  # Mode.value; plain data keeps the pool pickling trivial
+    targets: "Tuple[str, ...]"  # sorted category names; picklable pool data
     keep: "Optional[str]"
     default_keeps: bool
     write: bool
@@ -253,9 +262,9 @@ def _read_source(path: str) -> "Tuple[str, str]":
     return raw.decode(encoding), encoding
 
 
-def _verified(src: str, stripped: str, mode: Mode) -> bool:
+def _verified(src: str, stripped: str, targets: "Tuple[str, ...]") -> bool:
     try:
-        return bool(verify(src, stripped, mode))
+        return bool(verify(src, stripped, targets))
     except Exception:
         return False
 
@@ -322,7 +331,7 @@ def _process_one(cfg: _Config, path: str) -> Result:
         return Result(path, SKIPPED, "cannot parse: %s" % exc)
     try:
         stripped = strip_source(
-            src, Mode(cfg.mode), keep, default_keeps=cfg.default_keeps
+            src, cfg.targets, keep, default_keeps=cfg.default_keeps
         )
     except (SyntaxError, tokenize.TokenError, ValueError) as exc:
         return Result(path, SKIPPED, "cannot parse: %s" % exc, None, violations)
@@ -332,7 +341,7 @@ def _process_one(cfg: _Config, path: str) -> Result:
         )
     if stripped == src:
         return Result(path, UNCHANGED, None, None, violations)
-    if not _verified(src, stripped, Mode(cfg.mode)):
+    if not _verified(src, stripped, cfg.targets):
         return Result(
             path,
             FAILED,
@@ -365,22 +374,22 @@ def _build_shared_options(parser: argparse.ArgumentParser) -> None:
         metavar="PATH",
         help="files or directories to strip",
     )
-    group = parser.add_mutually_exclusive_group()
-    group.add_argument(
-        "--docstrings",
-        dest="mode",
-        action="store_const",
-        const=Mode.DOCSTRINGS,
-        help="also delete module/class/function docstrings",
+    parser.add_argument(
+        "--delete",
+        action="append",
+        choices=sorted(TARGETS),
+        metavar="CAT",
+        help="delete this category instead of the default (%s); one of %s, "
+        "repeatable to select several"
+        % (", ".join(sorted(ALL_TARGETS)), ", ".join(sorted(TARGETS))),
     )
-    group.add_argument(
-        "--all",
-        dest="mode",
-        action="store_const",
-        const=Mode.ALL,
-        help="delete every comment, including trailing ones",
+    parser.add_argument(
+        "--skip",
+        action="append",
+        choices=sorted(TARGETS),
+        metavar="CAT",
+        help="keep this category despite the selection (repeatable)",
     )
-    parser.set_defaults(mode=None)
     parser.add_argument(
         "--diff",
         action="store_true",
@@ -391,7 +400,7 @@ def _build_shared_options(parser: argparse.ArgumentParser) -> None:
         type=int,
         metavar="N",
         help="report docstrings longer than N content lines; exit 1 if any "
-        "(composes with every mode)",
+        "(composes with every selection)",
     )
     parser.add_argument(
         "--keep",
@@ -436,8 +445,10 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="censor",
         description="Delete comments (and optionally docstrings) from Python "
-        "code. Files are rewritten in place, atomically, and only when "
-        "the result "
+        "code. Categories: own-line (a comment alone on its line), trailing "
+        "(after code on the same line), docstrings. Default selection: "
+        "--delete own-line trailing. Files are rewritten in place, "
+        "atomically, and only when the result "
         "provably preserves the program; anything that cannot be proven safe "
         "is left untouched and reported.",
     )
@@ -475,7 +486,15 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-_VALUE_FLAGS = ("--keep", "--exclude", "--config", "--max-doc-lines", "--jobs")
+_VALUE_FLAGS = (
+    "--keep",
+    "--exclude",
+    "--config",
+    "--max-doc-lines",
+    "--jobs",
+    "--delete",
+    "--skip",
+)
 
 
 def _normalise_argv(argv: List[str], parser: argparse.ArgumentParser) -> None:
@@ -517,15 +536,19 @@ def _report(
 
 def _merge(
     ns: argparse.Namespace, config: dict, parser: argparse.ArgumentParser
-) -> "Tuple[Mode, Optional[str], bool, List[str]]":
-    """Resolve (mode, keep-regex, default_keeps, exclude): config supplies
-    defaults, any explicit CLI flag wins outright."""
-    if ns.mode is not None:
-        mode = ns.mode
-    elif "mode" in config:
-        mode = Mode(config["mode"])
+) -> "Tuple[Tuple[str, ...], Optional[str], bool, List[str]]":
+    """Resolve (targets, keep-regex, default_keeps, exclude): config
+    supplies defaults, any explicit CLI flag wins outright."""
+    if ns.delete is not None:
+        selected = set(ns.delete)
+    elif "delete" in config:
+        selected = set(config["delete"])
     else:
-        mode = Mode.OWN_LINE
+        selected = set(ALL_TARGETS)
+    skips = ns.skip if ns.skip is not None else set(config.get("skip") or [])
+    selected -= set(skips)
+    if not selected:
+        parser.error("nothing to delete")
     patterns = (
         list(ns.keep) if ns.keep is not None else list(config.get("keep") or [])
     )
@@ -549,7 +572,7 @@ def _merge(
         if ns.exclude is not None
         else list(config.get("exclude") or [])
     )
-    return mode, keep, default_keeps, exclude
+    return tuple(sorted(selected)), keep, default_keeps, exclude
 
 
 def main(argv: "Optional[Sequence[str]]" = None) -> int:
@@ -561,7 +584,7 @@ def main(argv: "Optional[Sequence[str]]" = None) -> int:
     if ns.max_doc_lines is not None and ns.max_doc_lines < 1:
         parser.error("--max-doc-lines must be at least 1")
     config = _load_config(ns.paths, ns.config, ns.isolated, parser)
-    mode, keep, default_keeps, exclude = _merge(ns, config, parser)
+    targets, keep, default_keeps, exclude = _merge(ns, config, parser)
     files, missing = _discover(ns.paths, exclude)
     for path in missing:
         print("censor: no such file or directory: %s" % path, file=sys.stderr)
@@ -572,7 +595,7 @@ def main(argv: "Optional[Sequence[str]]" = None) -> int:
     checking = not ns.fix if command == "check" else bool(ns.check)
     write = not checking and not ns.diff
     cfg = _Config(
-        mode.value, keep, default_keeps, write, ns.diff, ns.max_doc_lines
+        targets, keep, default_keeps, write, ns.diff, ns.max_doc_lines
     )
     jobs = ns.jobs if ns.jobs is not None else os.cpu_count() or 1
 

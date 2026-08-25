@@ -2,15 +2,19 @@
 
 Library use::
 
-    from censor import Mode, strip_source, verify
+    from censor import ALL_TARGETS, strip_source, verify
 
-    stripped = strip_source(src, Mode.OWN_LINE)
-    assert verify(src, stripped, Mode.OWN_LINE)
+    stripped = strip_source(src, {"own-line"})
+    assert verify(src, stripped, {"own-line"})
 """
 
+from censor._core import ALL_TARGETS
 from censor._core import DEFAULT_KEEPS
+from censor._core import DOCSTRINGS
+from censor._core import OWN_LINE
+from censor._core import TARGETS
+from censor._core import TRAILING
 from censor._core import DocstringViolation
-from censor._core import Mode
 from censor._core import docstring_violations
 from censor._core import strip_source
 from censor._core import verify
@@ -18,7 +22,11 @@ from censor._core import verify
 __version__ = "0.1.0"
 
 __all__ = [
-    "Mode",
+    "OWN_LINE",
+    "TRAILING",
+    "DOCSTRINGS",
+    "ALL_TARGETS",
+    "TARGETS",
     "strip_source",
     "verify",
     "DEFAULT_KEEPS",
