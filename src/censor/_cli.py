@@ -252,7 +252,6 @@ class _Config(NamedTuple):
     write: bool
     want_diff: bool
     max_doc_lines: "Optional[int]" = None
-    skip_orphan_strings: bool = False
 
 
 def _resolve_skip_orphan_strings(
@@ -625,7 +624,6 @@ def main(argv: "Optional[Sequence[str]]" = None) -> int:
 
     checking = not ns.fix if command == "check" else bool(ns.check)
     write = not checking and not ns.diff
-    skip_orphan_strings = _resolve_skip_orphan_strings(ns, config)
     cfg = _Config(
         targets,
         keep,
@@ -633,7 +631,6 @@ def main(argv: "Optional[Sequence[str]]" = None) -> int:
         write,
         ns.diff,
         ns.max_doc_lines,
-        skip_orphan_strings,
     )
     jobs = ns.jobs if ns.jobs is not None else os.cpu_count() or 1
 

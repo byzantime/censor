@@ -167,7 +167,7 @@ def _mark_comments(
     return delete, replace
 
 
-def _mark_docstrings(
+def _mark_ast_deletions(
     lines: List[str],
     tree: ast.Module,
     selected: frozenset,
@@ -235,7 +235,7 @@ def strip_source(
     needs_ast = DOCSTRINGS in selected or ORPHAN_STRINGS in selected
     if needs_ast:
         tree = ast.parse(src)
-        _mark_docstrings(
+        _mark_ast_deletions(
             lines, tree, selected, keep, default_keeps, delete, replace
         )
     rebuilt = _rebuild(lines, delete, replace)
@@ -332,7 +332,6 @@ def _find_orphan_strings(
             and isinstance(node, ast.Expr)
             and isinstance(node.value, ast.Constant)
             and isinstance(node.value.value, str)
-            and not isinstance(node.value, ast.JoinedStr)
         ):
             orphans.append((prev, node))
     return orphans
