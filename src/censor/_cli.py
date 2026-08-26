@@ -52,8 +52,8 @@ SERIAL_THRESHOLD = 20
 
 UNCHANGED = "unchanged"
 CHANGED = "changed"
-SKIPPED = "skipped"  # could not be tokenized/parsed/decoded; left untouched
-FAILED = "failed"  # verification refused the result; left untouched
+SKIPPED = "skipped"
+FAILED = "failed"
 
 PROJECT_ROOT_MARKERS = frozenset({".git", ".hg"})
 

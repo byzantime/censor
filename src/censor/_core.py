@@ -90,10 +90,9 @@ def _deletable_docstrings(
 
     Returns ``(owner, docstring_stmt, sole)`` triples; *sole* means the
     docstring is the entire body of a class or function, so deleting it
-    requires a ``pass`` in its place.  Docstrings sharing a line with
-    other code are left alone.  With *trailing_ok*, a trailing comment
-    after the docstring counts as empty — unless the comment is kept
-    (pragma list or *keep*), in which case it blocks deletion.
+    requires a ``pass`` in its place.  With *trailing_ok*, a trailing
+    comment after the docstring counts as empty — unless the comment is
+    kept (pragma list or *keep*), which blocks deletion.
     """
     found = []
     for node in ast.walk(tree):
@@ -272,12 +271,10 @@ def verify(
     """Recompute, from scratch, that *stripped* is equivalent to *src*.
 
     Comment deletions are verified by comparing the token streams with
-    COMMENT/NL filtered out — equality implies the compiler sees identical
-    programs, at a fraction of the cost of parsing. When DOCSTRINGS is
-    selected, both sides are parsed and ``ast.dump`` compared after
-    normalising the removed docstrings out of *src*.  *keep* and
-    *default_keeps* must match those used for stripping so that both sides
-    agree on which docstring-plus-comment lines are deletable.
+    COMMENT/NL filtered out.  When DOCSTRINGS is selected, both sides are
+    parsed and ``ast.dump`` compared after normalising removed docstrings
+    out of *src*.  *keep* and *default_keeps* must match those used for
+    stripping so both sides agree which lines are deletable.
     """
     selected = _normalise_targets(targets)
     if DOCSTRINGS in selected:
