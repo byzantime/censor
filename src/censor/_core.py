@@ -82,11 +82,9 @@ def _deletable_docstrings(
 
     Returns ``(owner, docstring_stmt, sole)`` triples; *sole* means the
     docstring is the entire body of a class or function, so deleting it
-    requires a ``pass`` in its place.  Docstrings that share a line with
-    other code (``def f(): "doc"``) are left alone — partial-line edits
-    of statements are never attempted.  With *trailing_ok*, a trailing
-    comment after the docstring counts as empty, matching what the
-    trailing-comment pass removes.
+    requires a ``pass`` in its place.  Docstrings sharing a line with
+    other code are left alone.  With *trailing_ok*, a trailing comment
+    after the docstring counts as empty.
     """
     found = []
     for node in ast.walk(tree):
@@ -138,14 +136,10 @@ def strip_source(
 ) -> str:
     """Return *src* with the selected comment categories deleted.
 
-    *targets* is an iterable of category names (see :data:`TARGETS`);
-    docstrings are deleted only when ``DOCSTRINGS`` is selected. Shebang
-    and PEP 263 coding lines always survive, as do comments matching
-    :data:`DEFAULT_KEEPS` (unless ``default_keeps=False``) or *keep*.
-    Raises ValueError on unknown category names, and
-    SyntaxError/tokenize.TokenError when *src* cannot be tokenized (or
-    parsed when DOCSTRINGS is selected); run the result through
-    :func:`verify` before persisting it anywhere.
+    *targets* is an iterable of category names (see :data:`TARGETS`).
+    Shebang, coding lines, and kept comments always survive.  Raises
+    ValueError on unknown names; SyntaxError/TokenError when *src*
+    cannot be tokenized.  Run the result through :func:`verify`.
     """
     selected = _normalise_targets(targets)
     lines = _physical_lines(src)

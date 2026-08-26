@@ -52,8 +52,8 @@ SERIAL_THRESHOLD = 20
 
 UNCHANGED = "unchanged"
 CHANGED = "changed"
-SKIPPED = "skipped"  # could not be tokenized/parsed/decoded; left untouched
-FAILED = "failed"  # verification refused the result; left untouched
+SKIPPED = "skipped"
+FAILED = "failed"
 
 PROJECT_ROOT_MARKERS = frozenset({".git", ".hg"})
 
@@ -244,7 +244,7 @@ def _atomic_write(path: str, data: bytes) -> None:
 
 
 class _Config(NamedTuple):
-    targets: "Tuple[str, ...]"  # sorted category names; picklable pool data
+    targets: "Tuple[str, ...]"
     keep: "Optional[str]"
     default_keeps: bool
     write: bool
@@ -335,7 +335,7 @@ def _process_one(cfg: _Config, path: str) -> Result:
         )
     except (SyntaxError, tokenize.TokenError, ValueError) as exc:
         return Result(path, SKIPPED, "cannot parse: %s" % exc, None, violations)
-    except Exception as exc:  # never let an engine bug touch the file
+    except Exception as exc:
         return Result(
             path, FAILED, "internal error: %r" % exc, None, violations
         )
