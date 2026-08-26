@@ -144,22 +144,14 @@ def _normalise_targets(targets: "Iterable[str]") -> frozenset:
     return selected
 
 
-def strip_source(
+def _mark_comments(
     src: str,
-    targets: "Iterable[str]" = ALL_TARGETS,
-    keep: "Optional[Pattern[str]]" = None,
-    *,
-    default_keeps: bool = True,
-) -> str:
-    """Return *src* with the selected comment categories deleted.
-
-    *targets* is an iterable of category names (see :data:`TARGETS`).
-    Shebang, coding lines, and kept comments always survive.  Raises
-    ValueError on unknown names; SyntaxError/TokenError when *src*
-    cannot be tokenized.  Run the result through :func:`verify`.
-    """
-    selected = _normalise_targets(targets)
-    lines = _physical_lines(src)
+    selected: frozenset,
+    lines: List[str],
+    keep: "Optional[Pattern[str]]",
+    default_keeps: bool,
+) -> "Tuple[Set[int], Dict[int, str]]":
+    """Return ``(delete, replace)`` sets for comment removal."""
     delete: Set[int] = set()
     replace: Dict[int, str] = {}
     for tok in tokenize.generate_tokens(io.StringIO(src).readline):
@@ -172,9 +164,19 @@ def strip_source(
                 delete.add(row - 1)
         elif TRAILING in selected:
             replace[row - 1] = line[:col].rstrip() + line[tok.end[1] :]
-    tree = None
-    if DOCSTRINGS in selected or ORPHAN_STRINGS in selected:
-        tree = ast.parse(src)
+    return delete, replace
+
+
+def _mark_docstrings(
+    lines: List[str],
+    tree: ast.Module,
+    selected: frozenset,
+    keep: "Optional[Pattern[str]]",
+    default_keeps: bool,
+    delete: Set[int],
+    replace: Dict[int, str],
+) -> None:
+    """Add docstring and orphan-string deletions to *delete*/*replace*."""
     if DOCSTRINGS in selected:
         for _owner, doc, sole in _deletable_docstrings(
             lines,
@@ -194,13 +196,50 @@ def strip_source(
         for _prev, expr in _find_orphan_strings(tree):
             first, last = expr.lineno - 1, expr.end_lineno - 1
             delete.update(range(first, last + 1))
+
+
+def _rebuild(
+    lines: List[str], delete: Set[int], replace: Dict[int, str]
+) -> "Optional[str]":
+    """Reconstruct source from *lines* applying *delete* and *replace*.
+
+    Returns ``None`` when nothing was changed, so the caller can
+    short-circuit and return the original source untouched.
+    """
     if not delete and not replace:
-        return src
+        return None
     return "".join(
         replace[i] if i in replace else line
         for i, line in enumerate(lines)
         if i in replace or i not in delete
     )
+
+
+def strip_source(
+    src: str,
+    targets: "Iterable[str]" = ALL_TARGETS,
+    keep: "Optional[Pattern[str]]" = None,
+    *,
+    default_keeps: bool = True,
+) -> str:
+    """Return *src* with the selected comment categories deleted.
+
+    *targets* is an iterable of category names (see :data:`TARGETS`).
+    Shebang, coding lines, and kept comments always survive.  Raises
+    ValueError on unknown names; SyntaxError/TokenError when *src*
+    cannot be tokenized.  Run the result through :func:`verify`.
+    """
+    selected = _normalise_targets(targets)
+    lines = _physical_lines(src)
+    delete, replace = _mark_comments(src, selected, lines, keep, default_keeps)
+    needs_ast = DOCSTRINGS in selected or ORPHAN_STRINGS in selected
+    if needs_ast:
+        tree = ast.parse(src)
+        _mark_docstrings(
+            lines, tree, selected, keep, default_keeps, delete, replace
+        )
+    rebuilt = _rebuild(lines, delete, replace)
+    return rebuilt if rebuilt is not None else src
 
 
 class DocstringViolation(NamedTuple):

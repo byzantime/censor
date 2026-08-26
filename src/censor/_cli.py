@@ -255,6 +255,17 @@ class _Config(NamedTuple):
     skip_orphan_strings: bool = False
 
 
+def _resolve_skip_orphan_strings(
+    ns: argparse.Namespace, config: dict
+) -> bool:
+    """Resolve the skip-orphan-strings flag from CLI and config."""
+    if ns.orphan_strings is not None:
+        return ns.orphan_strings
+    if "orphan-strings" in config:
+        return config["orphan-strings"]
+    return False
+
+
 def _read_source(path: str) -> "Tuple[str, str]":
     """Read *path* and decode it per its PEP 263 coding declaration.
 
@@ -564,12 +575,7 @@ def _merge(
         selected = set(ALL_TARGETS)
     skips = ns.skip if ns.skip is not None else set(config.get("skip") or [])
     selected -= set(skips)
-    if ns.orphan_strings is not None:
-        skip_orphan_strings = ns.orphan_strings
-    elif "orphan-strings" in config:
-        skip_orphan_strings = config["orphan-strings"]
-    else:
-        skip_orphan_strings = False
+    skip_orphan_strings = _resolve_skip_orphan_strings(ns, config)
     if not skip_orphan_strings and ORPHAN_STRINGS not in skips:
         selected.add(ORPHAN_STRINGS)
     if not selected:
@@ -619,12 +625,7 @@ def main(argv: "Optional[Sequence[str]]" = None) -> int:
 
     checking = not ns.fix if command == "check" else bool(ns.check)
     write = not checking and not ns.diff
-    if ns.orphan_strings is not None:
-        skip_orphan_strings = ns.orphan_strings
-    elif "orphan-strings" in config:
-        skip_orphan_strings = config["orphan-strings"]
-    else:
-        skip_orphan_strings = False
+    skip_orphan_strings = _resolve_skip_orphan_strings(ns, config)
     cfg = _Config(
         targets,
         keep,
