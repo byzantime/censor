@@ -183,8 +183,6 @@ def _validate_config(
                         ", ".join(bad),
                     )
                 )
-        if key in ("keep", "exclude", "delete", "skip"):
-            _validate_list_key(key, value, source, parser)
     return table
 
 
