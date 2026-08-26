@@ -16,8 +16,8 @@ from censor._core import OWN_LINE
 from censor._core import TARGETS
 from censor._core import TRAILING
 from censor._core import DocstringViolation
-from censor._core import docstring_violations
 from censor._core import OrphanString
+from censor._core import docstring_violations
 from censor._core import orphan_string_violations
 from censor._core import strip_orphan_strings
 from censor._core import strip_source

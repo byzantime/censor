@@ -5,12 +5,11 @@ import pytest
 
 from censor import ALL_TARGETS
 from censor import DOCSTRINGS
-from censor import OWN_LINE
 from censor import ORPHAN_STRINGS
+from censor import OWN_LINE
 from censor import TRAILING
 from censor import _cli
 from censor import orphan_string_violations
-from censor import strip_orphan_strings
 from censor import strip_source
 from censor import verify
 from censor._cli import main
