@@ -26,6 +26,7 @@ from typing import Sequence
 from typing import Tuple
 
 from censor._core import ALL_TARGETS
+from censor._core import ORPHAN_STRINGS
 from censor._core import TARGETS
 from censor._core import docstring_violations
 from censor._core import strip_source
@@ -62,6 +63,7 @@ CONFIG_KEYS = {
     "skip": list,
     "keep": list,
     "default-keeps": bool,
+    "orphan-strings": bool,
     "exclude": list,
 }
 
@@ -250,6 +252,7 @@ class _Config(NamedTuple):
     write: bool
     want_diff: bool
     max_doc_lines: "Optional[int]" = None
+    skip_orphan_strings: bool = False
 
 
 def _read_source(path: str) -> "Tuple[str, str]":
@@ -447,6 +450,12 @@ def _build_shared_options(parser: argparse.ArgumentParser) -> None:
         metavar="N",
         help="worker processes (default: number of CPUs)",
     )
+    parser.add_argument(
+        "--orphan-strings",
+        action=argparse.BooleanOptionalAction,
+        help="skip deletion of orphan strings (bare string expressions after "
+        "assignments at module level); default: delete them",
+    )
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -555,6 +564,14 @@ def _merge(
         selected = set(ALL_TARGETS)
     skips = ns.skip if ns.skip is not None else set(config.get("skip") or [])
     selected -= set(skips)
+    if ns.orphan_strings is not None:
+        skip_orphan_strings = ns.orphan_strings
+    elif "orphan-strings" in config:
+        skip_orphan_strings = config["orphan-strings"]
+    else:
+        skip_orphan_strings = False
+    if not skip_orphan_strings and ORPHAN_STRINGS not in skips:
+        selected.add(ORPHAN_STRINGS)
     if not selected:
         parser.error("nothing to delete")
     patterns = (
@@ -602,8 +619,20 @@ def main(argv: "Optional[Sequence[str]]" = None) -> int:
 
     checking = not ns.fix if command == "check" else bool(ns.check)
     write = not checking and not ns.diff
+    if ns.orphan_strings is not None:
+        skip_orphan_strings = ns.orphan_strings
+    elif "orphan-strings" in config:
+        skip_orphan_strings = config["orphan-strings"]
+    else:
+        skip_orphan_strings = False
     cfg = _Config(
-        targets, keep, default_keeps, write, ns.diff, ns.max_doc_lines
+        targets,
+        keep,
+        default_keeps,
+        write,
+        ns.diff,
+        ns.max_doc_lines,
+        skip_orphan_strings,
     )
     jobs = ns.jobs if ns.jobs is not None else os.cpu_count() or 1
 

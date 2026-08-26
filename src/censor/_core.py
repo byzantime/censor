@@ -25,6 +25,7 @@ __all__ = [
     "OWN_LINE",
     "TRAILING",
     "DOCSTRINGS",
+    "ORPHAN_STRINGS",
     "ALL_TARGETS",
     "TARGETS",
     "strip_source",
@@ -32,14 +33,18 @@ __all__ = [
     "DEFAULT_KEEPS",
     "DocstringViolation",
     "docstring_violations",
+    "OrphanString",
+    "orphan_string_violations",
+    "strip_orphan_strings",
 ]
 
 
 OWN_LINE = "own-line"
 TRAILING = "trailing"
 DOCSTRINGS = "docstrings"
+ORPHAN_STRINGS = "orphan-strings"
 ALL_TARGETS = frozenset({OWN_LINE, TRAILING})
-TARGETS = frozenset({OWN_LINE, TRAILING, DOCSTRINGS})
+TARGETS = frozenset({OWN_LINE, TRAILING, DOCSTRINGS, ORPHAN_STRINGS})
 
 
 DEFAULT_KEEPS: "Pattern[str]" = re.compile(
@@ -167,10 +172,13 @@ def strip_source(
                 delete.add(row - 1)
         elif TRAILING in selected:
             replace[row - 1] = line[:col].rstrip() + line[tok.end[1] :]
+    tree = None
+    if DOCSTRINGS in selected or ORPHAN_STRINGS in selected:
+        tree = ast.parse(src)
     if DOCSTRINGS in selected:
         for _owner, doc, sole in _deletable_docstrings(
             lines,
-            ast.parse(src),
+            tree,
             TRAILING in selected,
             keep=keep,
             default_keeps=default_keeps,
@@ -182,6 +190,10 @@ def strip_source(
                 indent = lines[first][: doc.col_offset]
                 ending = lines[last][len(lines[last].rstrip("\r\n")) :]
                 replace[last] = indent + "pass" + ending
+    if ORPHAN_STRINGS in selected:
+        for _prev, expr in _find_orphan_strings(tree):
+            first, last = expr.lineno - 1, expr.end_lineno - 1
+            delete.update(range(first, last + 1))
     if not delete and not replace:
         return src
     return "".join(
@@ -246,6 +258,81 @@ def docstring_violations(src: str, max_lines: int) -> List[DocstringViolation]:
     return violations
 
 
+class OrphanString(NamedTuple):
+    """A bare string expression following an assignment at module level."""
+
+    name: str
+    lineno: int
+    lines: int
+
+
+def _find_orphan_strings(
+    tree: ast.Module,
+) -> "List[Tuple[ast.stmt, ast.Expr]]":
+    """Module-level orphan string pairs: ``(preceding_assign, string_expr)``.
+
+    An orphan string is a bare string expression that immediately follows
+    an assignment statement at module level.  The module-level docstring
+    (first statement if it is a string constant) is excluded.
+    """
+    body = tree.body
+    start = 0
+    if (
+        body
+        and isinstance(body[0], ast.Expr)
+        and isinstance(body[0].value, ast.Constant)
+        and isinstance(body[0].value.value, str)
+    ):
+        start = 1
+    orphans = []
+    for i in range(start + 1, len(body)):
+        prev = body[i - 1]
+        node = body[i]
+        if (
+            isinstance(prev, (ast.Assign, ast.AnnAssign))
+            and isinstance(node, ast.Expr)
+            and isinstance(node.value, ast.Constant)
+            and isinstance(node.value.value, str)
+            and not isinstance(node.value, ast.JoinedStr)
+        ):
+            orphans.append((prev, node))
+    return orphans
+
+
+def orphan_string_violations(src: str) -> "List[OrphanString]":
+    """Module-level orphan strings in *src*.
+
+    An orphan string is a bare string expression that immediately follows
+    an assignment at module level.  Never rewrites anything; raises
+    :class:`SyntaxError` when *src* does not parse.
+    """
+    tree = ast.parse(src)
+    violations = []
+    for _prev, node in _find_orphan_strings(tree):
+        const = node.value
+        n = sum(1 for line in const.value.splitlines() if line.strip())
+        name = "<unknown>"
+        if isinstance(_prev, ast.Assign) and _prev.targets:
+            target = _prev.targets[0]
+            if isinstance(target, ast.Name):
+                name = target.id
+        elif isinstance(_prev, ast.AnnAssign) and isinstance(
+            _prev.target, ast.Name
+        ):
+            name = _prev.target.id
+        violations.append(OrphanString(name, node.lineno, n))
+    return violations
+
+
+def strip_orphan_strings(src: str) -> str:
+    """Return *src* with orphan string statements deleted.
+
+    Convenience wrapper around :func:`strip_source` targeting only orphan
+    strings.  Run the result through :func:`verify` for safety.
+    """
+    return strip_source(src, {ORPHAN_STRINGS})
+
+
 _INSIGNIFICANT = frozenset({tokenize.COMMENT, tokenize.NL})
 
 
@@ -277,17 +364,21 @@ def verify(
     stripping so both sides agree which lines are deletable.
     """
     selected = _normalise_targets(targets)
-    if DOCSTRINGS in selected:
+    if DOCSTRINGS in selected or ORPHAN_STRINGS in selected:
         tree = ast.parse(src)
-        for owner, doc, sole in _deletable_docstrings(
-            _physical_lines(src),
-            tree,
-            TRAILING in selected,
-            keep=keep,
-            default_keeps=default_keeps,
-        ):
-            owner.body.remove(doc)
-            if sole:
-                owner.body.append(ast.Pass())
+        if DOCSTRINGS in selected:
+            for owner, doc, sole in _deletable_docstrings(
+                _physical_lines(src),
+                tree,
+                TRAILING in selected,
+                keep=keep,
+                default_keeps=default_keeps,
+            ):
+                owner.body.remove(doc)
+                if sole:
+                    owner.body.append(ast.Pass())
+        if ORPHAN_STRINGS in selected:
+            for _prev, expr in _find_orphan_strings(tree):
+                tree.body.remove(expr)
         return ast.dump(tree) == ast.dump(ast.parse(stripped))
     return _significant_tokens(src) == _significant_tokens(stripped)

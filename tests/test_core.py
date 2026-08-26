@@ -6,8 +6,11 @@ import pytest
 from censor import ALL_TARGETS
 from censor import DOCSTRINGS
 from censor import OWN_LINE
+from censor import ORPHAN_STRINGS
 from censor import TRAILING
 from censor import _cli
+from censor import orphan_string_violations
+from censor import strip_orphan_strings
 from censor import strip_source
 from censor import verify
 from censor._cli import main
@@ -597,7 +600,18 @@ def test_cli_empty_selection_errors(tmp_path, capsys):
     f = tmp_path / "a.py"
     f.write_text("x = 1\n")
     with pytest.raises(SystemExit) as exc:
-        main(["format", "--skip", "own-line", "--skip", "trailing", str(f)])
+        main(
+            [
+                "format",
+                "--skip",
+                "own-line",
+                "--skip",
+                "trailing",
+                "--skip",
+                "orphan-strings",
+                str(f),
+            ]
+        )
     assert exc.value.code == 2
     assert "nothing to delete" in capsys.readouterr().err
 
@@ -802,3 +816,161 @@ def test_cli_max_doc_lines_reports_and_exits_1(tmp_path, capsys):
 def test_cli_max_doc_lines_invalid_value_rejected(capsys):
     with pytest.raises(SystemExit):
         main(["--max-doc-lines", "0", "."])
+
+
+def test_orphan_string_violations_detects_gaming_pattern():
+    src = (
+        "ARCHIVE_RETIRING_STATUSES = frozenset({1, 2})\n"
+        '"""The statuses that end a task\'s need.\n'
+        "\n"
+        "Paragraph.\n"
+        '"""\n'
+    )
+    vs = orphan_string_violations(src)
+    assert len(vs) == 1
+    assert vs[0].name == "ARCHIVE_RETIRING_STATUSES"
+    assert vs[0].lineno == 2
+    assert vs[0].lines == 2
+
+
+def test_orphan_string_violations_skips_module_docstring():
+    src = '"""Module docstring."""\nx = 1\n'
+    assert orphan_string_violations(src) == []
+
+
+def test_orphan_string_violations_skips_fstring():
+    src = 'x = 1\nf"""not a string {1}"""\n'
+    assert orphan_string_violations(src) == []
+
+
+def test_orphan_string_violations_skips_string_after_import():
+    src = 'import os\n"""not orphan"""\n'
+    assert orphan_string_violations(src) == []
+
+
+def test_orphan_string_violations_skips_string_after_class():
+    src = 'class C:\n    pass\n"""not orphan"""\n'
+    assert orphan_string_violations(src) == []
+
+
+def test_orphan_string_violations_skips_string_after_def():
+    src = 'def f():\n    pass\n"""not orphan"""\n'
+    assert orphan_string_violations(src) == []
+
+
+def test_orphan_string_violations_detects_annassign():
+    src = 'x: int = 1\n"""orphan"""\n'
+    vs = orphan_string_violations(src)
+    assert len(vs) == 1
+    assert vs[0].name == "x"
+
+
+def test_orphan_string_violations_no_assignment():
+    src = '"""standalone string"""\n'
+    assert orphan_string_violations(src) == []
+
+
+def test_orphan_string_violations_multiline_string():
+    src = 'x = 1\n"""\nmultiline\nstring\n"""\n'
+    vs = orphan_string_violations(src)
+    assert len(vs) == 1
+    assert vs[0].lines == 2
+
+
+def test_strip_orphan_strings_removes_gaming_pattern():
+    src = (
+        "ARCHIVE_RETIRING_STATUSES = frozenset({1, 2})\n"
+        '"""The statuses that end a task\'s need.\n'
+        "\n"
+        "Paragraph.\n"
+        '"""\n'
+        "_LEGACY_HOST_MODE = 'host'\n"
+    )
+    out = strip_source(src, {ORPHAN_STRINGS})
+    assert verify(src, out, {ORPHAN_STRINGS})
+    assert "frozenset" in out
+    assert "_LEGACY_HOST_MODE" in out
+    assert '"""' not in out
+
+
+def test_strip_orphan_strings_preserves_everything_else():
+    src = "# comment\nx = 1\n"
+    out = strip_source(src, {ORPHAN_STRINGS})
+    assert out == src
+
+
+def test_strip_orphan_strings_does_not_delete_module_docstring():
+    src = '"""Module docstring."""\nx = 1\n'
+    out = strip_source(src, {ORPHAN_STRINGS})
+    assert out == src
+
+
+def test_strip_orphan_strings_does_not_delete_fstring_after_assign():
+    src = 'x = 1\nf"""not orphan {1}"""\n'
+    out = strip_source(src, {ORPHAN_STRINGS})
+    assert out == src
+
+
+def test_strip_orphan_strings_composes_with_docstrings():
+    src = (
+        '"""Module docstring."""\n'
+        "x = 1\n"
+        '"""orphan"""\n'
+        "def f():\n"
+        '    """docstring."""\n'
+    )
+    targets = {ORPHAN_STRINGS, DOCSTRINGS}
+    out = strip_source(src, targets)
+    assert verify(src, out, targets)
+    assert '"""' not in out
+    assert "x = 1" in out
+
+
+def test_cli_orphan_strings_deleted_by_default(tmp_path):
+    f = tmp_path / "a.py"
+    src = (
+        "ARCHIVE_STATUSES = frozenset({1})\n"
+        '"""gaming pattern"""\n'
+        "x = 1\n"
+    )
+    f.write_text(src)
+    assert main(["format", str(f)]) == 0
+    result = f.read_text()
+    assert '"""gaming pattern"""' not in result
+    assert "ARCHIVE_STATUSES" in result
+    assert "x = 1" in result
+
+
+def test_cli_skip_orphan_strings_prevents_deletion(tmp_path):
+    f = tmp_path / "a.py"
+    src = 'x = 1\n"""orphan"""\n'
+    f.write_text(src)
+    assert main(["format", "--skip", "orphan-strings", str(f)]) == 0
+    assert f.read_text() == src
+
+
+def test_cli_no_orphan_strings_deletes_despite_flag(tmp_path):
+    f = tmp_path / "a.py"
+    src = 'x = 1\n"""orphan"""\n'
+    f.write_text(src)
+    assert main(["format", "--no-orphan-strings", str(f)]) == 0
+    assert f.read_text() == "x = 1\n"
+
+
+def test_cli_config_orphan_strings_true_skips(tmp_path):
+    (tmp_path / "pyproject.toml").write_text(
+        '[tool.censor]\norphan-strings = true\n'
+    )
+    f = tmp_path / "a.py"
+    src = 'x = 1\n"""orphan"""\n'
+    f.write_text(src)
+    assert main(["format", str(f)]) == 0
+    assert f.read_text() == src
+
+
+def test_cli_check_orphan_strings_reports_change(tmp_path, capsys):
+    f = tmp_path / "a.py"
+    f.write_text('x = 1\n"""orphan"""\n')
+    assert main(["check", str(f)]) == 1
+    out = capsys.readouterr()
+    assert "would strip" in out.out
