@@ -52,8 +52,8 @@ SERIAL_THRESHOLD = 20
 
 UNCHANGED = "unchanged"
 CHANGED = "changed"
-SKIPPED = "skipped"
-FAILED = "failed"
+SKIPPED = "skipped"  # could not be tokenized/parsed/decoded; left untouched
+FAILED = "failed"  # verification refused the result; left untouched
 
 PROJECT_ROOT_MARKERS = frozenset({".git", ".hg"})
 
@@ -169,6 +169,8 @@ def _validate_config(
                     value,
                 )
             )
+        if key in ("keep", "exclude", "delete", "skip"):
+            _validate_list_key(key, value, source, parser)
         if key in ("delete", "skip"):
             bad = sorted(set(value) - TARGETS)
             if bad:
@@ -262,9 +264,17 @@ def _read_source(path: str) -> "Tuple[str, str]":
     return raw.decode(encoding), encoding
 
 
-def _verified(src: str, stripped: str, targets: "Tuple[str, ...]") -> bool:
+def _verified(src: str, stripped: str, cfg: _Config) -> bool:
     try:
-        return bool(verify(src, stripped, targets))
+        return bool(
+            verify(
+                src,
+                stripped,
+                cfg.targets,
+                keep=cfg.keep,
+                default_keeps=cfg.default_keeps,
+            )
+        )
     except Exception:
         return False
 
@@ -341,7 +351,7 @@ def _process_one(cfg: _Config, path: str) -> Result:
         )
     if stripped == src:
         return Result(path, UNCHANGED, None, None, violations)
-    if not _verified(src, stripped, cfg.targets):
+    if not _verified(src, stripped, cfg):
         return Result(
             path,
             FAILED,

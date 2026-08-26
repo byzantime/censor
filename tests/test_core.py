@@ -170,6 +170,23 @@ def test_docstring_with_trailing_comment():
     assert strip(src, COMMENTS) == 'def f():\n    """doc"""\n    return 1\n'
 
 
+def test_docstring_with_kept_trailing_pragma_is_untouched():
+    src = 'def f():\n    """doc"""  # noqa\n    return 1\n'
+    assert strip(src, EVERYTHING) == src
+    assert verify(src, src, EVERYTHING)
+    kept = re.compile(r"KEEP")
+    src2 = 'def f():\n    """doc"""  # KEEP\n    return 1\n'
+    assert strip_source(src2, EVERYTHING, keep=kept) == src2
+    assert verify(src2, src2, EVERYTHING, keep=kept)
+
+
+def test_docstring_trailing_comment_deleted_when_not_kept():
+    src = 'def f():\n    """doc"""  # noqa\n'
+    out = strip_source(src, EVERYTHING, default_keeps=False)
+    assert out == "def f():\n    pass\n"
+    assert verify(src, out, EVERYTHING, default_keeps=False)
+
+
 def test_docstrings_selection_keeps_comments():
     src = "x = 1  # trailing\ny = 2\n"
     assert strip(src, {DOCSTRINGS}) == src
@@ -583,6 +600,17 @@ def test_cli_empty_selection_errors(tmp_path, capsys):
         main(["format", "--skip", "own-line", "--skip", "trailing", str(f)])
     assert exc.value.code == 2
     assert "nothing to delete" in capsys.readouterr().err
+
+
+def test_cli_non_string_delete_entry_errors_cleanly(tmp_path, capsys):
+    (tmp_path / "pyproject.toml").write_text(
+        '[tool.censor]\ndelete = [["own-line"]]\n'
+    )
+    f = tmp_path / "a.py"
+    f.write_text("x = 1\n")
+    with pytest.raises(SystemExit):
+        main(["format", str(f)])
+    assert "entries must be strings" in capsys.readouterr().err
 
 
 def test_cli_repeatable_keep_flags(tmp_path):

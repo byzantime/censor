@@ -61,11 +61,9 @@ def _physical_lines(src: str) -> List[str]:
     return io.StringIO(src).readlines()
 
 
-def _kept(
-    tok: tokenize.TokenInfo, keep: "Optional[Pattern[str]]", default_keeps: bool
+def _kept_comment(
+    text: str, row: int, keep: "Optional[Pattern[str]]", default_keeps: bool
 ) -> bool:
-    text = tok.string
-    row = tok.start[0]
     if row == 1 and text.startswith("#!"):
         return True
     if row <= 2 and _CODING.match(text):
@@ -75,8 +73,18 @@ def _kept(
     return keep is not None and keep.search(text) is not None
 
 
+def _kept(
+    tok: tokenize.TokenInfo, keep: "Optional[Pattern[str]]", default_keeps: bool
+) -> bool:
+    return _kept_comment(tok.string, tok.start[0], keep, default_keeps)
+
+
 def _deletable_docstrings(
-    lines: List[str], tree: ast.Module, trailing_ok: bool = False
+    lines: List[str],
+    tree: ast.Module,
+    trailing_ok: bool = False,
+    keep: "Optional[Pattern[str]]" = None,
+    default_keeps: bool = True,
 ) -> "List[Tuple[ast.stmt, ast.Expr, bool]]":
     """Docstrings whose physical lines contain nothing but the docstring.
 
@@ -84,7 +92,8 @@ def _deletable_docstrings(
     docstring is the entire body of a class or function, so deleting it
     requires a ``pass`` in its place.  Docstrings sharing a line with
     other code are left alone.  With *trailing_ok*, a trailing comment
-    after the docstring counts as empty.
+    after the docstring counts as empty — unless the comment is kept
+    (pragma list or *keep*), in which case it blocks deletion.
     """
     found = []
     for node in ast.walk(tree):
@@ -103,10 +112,14 @@ def _deletable_docstrings(
         if lines[doc.lineno - 1][: doc.col_offset].strip():
             continue
         residue = lines[doc.end_lineno - 1][doc.end_col_offset :]
-        if residue.strip() and not (
-            trailing_ok and residue.lstrip().startswith("#")
-        ):
-            continue
+        if residue.strip():
+            comment = residue.lstrip()
+            if not comment.startswith("#"):
+                continue
+            if not trailing_ok:
+                continue
+            if _kept_comment(comment, doc.end_lineno, keep, default_keeps):
+                continue
         sole = len(body) == 1 and not isinstance(node, ast.Module)
         found.append((node, doc, sole))
     return found
@@ -157,7 +170,11 @@ def strip_source(
             replace[row - 1] = line[:col].rstrip() + line[tok.end[1] :]
     if DOCSTRINGS in selected:
         for _owner, doc, sole in _deletable_docstrings(
-            lines, ast.parse(src), TRAILING in selected
+            lines,
+            ast.parse(src),
+            TRAILING in selected,
+            keep=keep,
+            default_keeps=default_keeps,
         ):
             first, last = doc.lineno - 1, doc.end_lineno - 1
             delete.update(range(first, last + 1))
@@ -245,7 +262,12 @@ def _significant_tokens(src: str) -> "List[Tuple[int, str]]":
 
 
 def verify(
-    src: str, stripped: str, targets: "Iterable[str]" = ALL_TARGETS
+    src: str,
+    stripped: str,
+    targets: "Iterable[str]" = ALL_TARGETS,
+    *,
+    keep: "Optional[Pattern[str]]" = None,
+    default_keeps: bool = True,
 ) -> bool:
     """Recompute, from scratch, that *stripped* is equivalent to *src*.
 
@@ -253,13 +275,19 @@ def verify(
     COMMENT/NL filtered out — equality implies the compiler sees identical
     programs, at a fraction of the cost of parsing. When DOCSTRINGS is
     selected, both sides are parsed and ``ast.dump`` compared after
-    normalising the removed docstrings out of *src*.
+    normalising the removed docstrings out of *src*.  *keep* and
+    *default_keeps* must match those used for stripping so that both sides
+    agree on which docstring-plus-comment lines are deletable.
     """
     selected = _normalise_targets(targets)
     if DOCSTRINGS in selected:
         tree = ast.parse(src)
         for owner, doc, sole in _deletable_docstrings(
-            _physical_lines(src), tree, TRAILING in selected
+            _physical_lines(src),
+            tree,
+            TRAILING in selected,
+            keep=keep,
+            default_keeps=default_keeps,
         ):
             owner.body.remove(doc)
             if sole:
