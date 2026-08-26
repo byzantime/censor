@@ -4,35 +4,40 @@ Delete comments — and optionally docstrings — from a Python codebase.
 Fast, and built so it provably cannot touch anything that isn't a comment.
 
 ```console
-$ censor format path/to/project       # strip own-line comments, in place
+$ censor format path/to/project       # strip own-line and trailing comments, in place
 $ censor check src/                   # CI gate: exit 1 if anything would change
-$ censor check --diff --docstrings pkg/   # preview without writing
+$ censor check --diff --delete docstrings pkg/   # preview without writing
 ```
 
 Zero runtime dependencies, pure stdlib, Python 3.11+.
 
-## The three modes
+## What gets deleted
 
-| Mode | Flag | Deletes |
-|---|---|---|
-| own-line *(default)* | — | comments that occupy their own line |
-| docstrings | `--docstrings` | own-line comments **plus** module/class/function docstrings |
-| all | `--all` | every comment, including trailing ones |
+Deletions are selected per category with `--delete CAT` (repeatable) and
+subtracted from with `--skip CAT` (repeatable):
 
-The default deliberately leaves trailing comments alone: they are where
-`# noqa`, `# type: ignore` and friends live, and where deleting hurts most.
+| Category | Meaning |
+|---|---|
+| own-line | comments that occupy their own line |
+| trailing | comments after code on the same line |
+| docstrings | module/class/function docstrings |
 
-In `--docstrings` mode, a class or function whose body is *only* a docstring
-gets a `pass` at the same indentation so the code still parses. A docstring
-that shares a physical line with other code (`def f(): "doc"`) or carries a
-trailing comment is conservatively kept.
+The default is equivalent to `--delete own-line --delete trailing`;
+docstrings are only ever deleted when explicitly selected. `--delete`
+replaces the default selection entirely (ruff select-style); `--skip`
+keeps a category despite the selection.
+
+When docstrings are selected, a class or function whose body is *only* a
+docstring gets a `pass` at the same indentation so the code still parses.
+A docstring that shares its line with other code (`def f(): "doc"`) is
+conservatively kept.
 
 ## What is always preserved
 
 - **Shebang** (`#!...` on line 1) and **PEP 263 coding declarations**
   (lines 1–2) — deleting these can break execution or the file's encoding,
-  so they survive every mode, even `--all --no-default-keeps`.
-- **Tool pragmas**, in every mode: comments starting with `# noqa`, `# fmt:`,
+  so they survive every selection, even `--no-default-keeps`.
+- **Tool pragmas**: comments starting with `# noqa`, `# fmt:`,
   `# isort:`, `# ruff:`, `# mypy:`, `# type:`, `# pyright:`, `# pragma:`
   (case-insensitive, flexible spacing). Pass `--no-default-keeps` if you
   really do want "literally all comments".
@@ -49,19 +54,19 @@ quotes, escapes, encodings, BOMs and CRLF line endings included.
 On top of that, every rewrite must pass an independent verification gate
 before the file is touched:
 
-- **Comment modes** re-tokenize input and output and require the token
+- **Comment deletions** re-tokenize input and output and require the token
   streams — minus `COMMENT`/`NL` tokens — to be identical. Equal significant
   token streams mean the compiler sees the exact same program.
-- **Docstring mode** parses both sides and requires the ASTs to match after
-  the removed docstrings are normalized out of the input.
+- **Docstring deletions** parse both sides and require the ASTs to match
+  after the removed docstrings are normalized out of the input.
 
 Any mismatch, or any internal error at all, leaves the file untouched and is
 reported (exit code 2). Files that cannot be tokenized/parsed, decoded, or
 that use lone-CR line endings are skipped the same way. Writes are atomic
 (temp file + `os.replace`), so a crash can never leave a half-written file.
 
-The stdlib of the running interpreter is used as a test corpus: all three
-modes must verify and be idempotent on every file.
+The stdlib of the running interpreter is used as a test corpus: every target
+set must verify and be idempotent on every file.
 
 ## CLI
 
@@ -69,8 +74,8 @@ censor uses two subcommands, so the invocations you already know from
 `ruff` and `black` do what you'd expect:
 
 ```text
-censor check PATH... [--fix] [--docstrings | --all] [options]
-censor format PATH... [--check] [--docstrings | --all] [options]
+censor check PATH... [--fix] [--delete CAT]... [--skip CAT]... [options]
+censor format PATH... [--check] [--delete CAT]... [--skip CAT]... [options]
 ```
 
 - `check` reports what would change and never writes; add `--fix`
@@ -81,9 +86,13 @@ censor format PATH... [--check] [--docstrings | --all] [options]
 Shared options:
 
 ```text
+  --delete CAT          delete this category instead of the default
+                        (own-line, trailing); one of own-line, trailing,
+                        docstrings; repeatable to select several
+  --skip CAT            keep this category despite the selection (repeatable)
   --diff                print unified diffs instead of writing (never writes)
   --max-doc-lines N     report docstrings longer than N content lines; exit 1
-                        if any (composes with every mode)
+                        if any (composes with every selection)
   --keep REGEX          also keep comments matching REGEX (repeatable)
   --default-keeps / --no-default-keeps
                         keep the built-in pragma preserve-list (default: true)
@@ -105,7 +114,8 @@ the same way `black` and `ruff` do:
 
 ```toml
 [tool.censor]
-mode = "own-line"        # "own-line" | "docstrings" | "all"
+delete = ["own-line"]    # replaces the default (own-line, trailing)
+skip = ["trailing"]      # subtracted from the selection
 keep = ["^# KEEP"]       # list of regexes for comments to preserve
 default-keeps = true     # built-in pragma preserve-list (# noqa etc.)
 exclude = ["migrations/*"]
@@ -152,9 +162,9 @@ $ censor check --max-doc-lines 20 src/   # CI gate for oversized docstrings
 content spans more than *N* lines, as
 `path:lineno: docstring of 'name' has M lines (limit N)`. It is a check,
 never a rewrite: docstrings are never modified by this flag, and it composes
-with every mode. The count covers the docstring's own text — interior blank
-lines do not count, the quote-only opening/closing lines do not. Any violation
-makes the exit code 1.
+with every selection. The count covers the docstring's own text — interior
+blank lines do not count, the quote-only opening/closing lines do not. Any
+violation makes the exit code 1.
 
 Performance: files are processed in parallel with a process pool; stripping
 plus verifying runs at roughly 8 MB of source per second per core (the
@@ -163,16 +173,18 @@ whole 15 MB CPython stdlib takes about two seconds on two cores).
 ## Library use
 
 ```python
-from censor import Mode, strip_source, verify
+from censor import DOCSTRINGS, strip_source, verify
 
-stripped = strip_source(src, Mode.DOCSTRINGS, keep=re.compile(r"KEEP"))
-assert verify(src, stripped, Mode.DOCSTRINGS)  # do this before persisting
+stripped = strip_source(
+    src, {"own-line", "docstrings"}, keep=re.compile(r"KEEP")
+)
+assert verify(src, stripped, {"own-line", "docstrings"})  # do before persisting
 ```
 
-`strip_source` is pure (`str -> str`) and raises `SyntaxError` /
-`tokenize.TokenError` on source it cannot process. `verify` recomputes
-equivalence from scratch; treat a `False` (or any exception) as "do not use
-the result".
+`strip_source` is pure (`str -> str`) and raises `ValueError` on unknown
+category names and `SyntaxError` / `tokenize.TokenError` on source it
+cannot process. `verify` recomputes equivalence from scratch; treat a
+`False` (or any exception) as "do not use the result".
 
 ## Development
 

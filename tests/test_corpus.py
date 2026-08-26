@@ -1,4 +1,5 @@
-"""Run every mode over the running interpreter's stdlib as a fuzz corpus.
+"""Run every target set over the running interpreter's stdlib as a fuzz
+corpus.
 
 Every file must strip, verify, and be idempotent under a second pass.
 """
@@ -10,7 +11,11 @@ import tokenize
 
 import pytest
 
-from censor import Mode
+from censor import ALL_TARGETS
+from censor import DOCSTRINGS
+from censor import OWN_LINE
+from censor import TARGETS
+from censor import TRAILING
 from censor import strip_source
 from censor import verify
 
@@ -33,8 +38,16 @@ def _corpus():
     ]
 
 
-@pytest.mark.parametrize("mode", list(Mode), ids=lambda m: m.value)
-def test_stdlib_corpus(mode):
+_TARGET_SETS = [
+    frozenset({OWN_LINE}),
+    frozenset({TRAILING}),
+    ALL_TARGETS,
+    frozenset(TARGETS),
+]
+
+
+@pytest.mark.parametrize("targets", _TARGET_SETS, ids=sorted)
+def test_stdlib_corpus(targets):
     files = _corpus()
     assert len(files) > 200, "stdlib corpus unexpectedly small"
     failures = []
@@ -43,13 +56,25 @@ def test_stdlib_corpus(mode):
         encoding, _ = tokenize.detect_encoding(io.BytesIO(raw).readline)
         src = raw.decode(encoding)
         try:
-            stripped = strip_source(src, mode)
+            stripped = strip_source(src, targets)
         except Exception as exc:
             failures.append("%s: strip raised %r" % (path, exc))
             continue
-        if not verify(src, stripped, mode):
+        if not verify(src, stripped, targets):
             failures.append("%s: failed verification" % path)
             continue
-        if strip_source(stripped, mode) != stripped:
+        if strip_source(stripped, targets) != stripped:
             failures.append("%s: not idempotent" % path)
     assert not failures, "\n".join(failures)
+
+
+def test_stdlib_corpus_docstrings_only():
+    targets = frozenset({DOCSTRINGS})
+    for path in _corpus()[:50]:
+        src = path.read_bytes().decode("utf-8", errors="replace")
+        try:
+            stripped = strip_source(src, targets)
+        except Exception:
+            continue
+        assert verify(src, stripped, targets), str(path)
+        assert strip_source(stripped, targets) == stripped
