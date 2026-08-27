@@ -13,6 +13,7 @@ import pytest
 
 from censor import ALL_TARGETS
 from censor import DOCSTRINGS
+from censor import ORPHAN_STRINGS
 from censor import OWN_LINE
 from censor import TARGETS
 from censor import TRAILING
@@ -41,6 +42,7 @@ def _corpus():
 _TARGET_SETS = [
     frozenset({OWN_LINE}),
     frozenset({TRAILING}),
+    frozenset({ORPHAN_STRINGS}),
     ALL_TARGETS,
     frozenset(TARGETS),
 ]

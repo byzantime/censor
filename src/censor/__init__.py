@@ -11,6 +11,7 @@ Library use::
 from censor._core import ALL_TARGETS
 from censor._core import DEFAULT_KEEPS
 from censor._core import DOCSTRINGS
+from censor._core import ORPHAN_STRINGS
 from censor._core import OWN_LINE
 from censor._core import TARGETS
 from censor._core import TRAILING
@@ -25,6 +26,7 @@ __all__ = [
     "OWN_LINE",
     "TRAILING",
     "DOCSTRINGS",
+    "ORPHAN_STRINGS",
     "ALL_TARGETS",
     "TARGETS",
     "strip_source",

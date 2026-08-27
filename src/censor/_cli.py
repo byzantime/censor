@@ -22,6 +22,7 @@ from typing import Iterator
 from typing import List
 from typing import NamedTuple
 from typing import Optional
+from typing import Pattern
 from typing import Sequence
 from typing import Tuple
 
@@ -262,14 +263,21 @@ def _read_source(path: str) -> "Tuple[str, str]":
     return raw.decode(encoding), encoding
 
 
-def _verified(src: str, stripped: str, cfg: _Config) -> bool:
+def _verified(
+    src: str, stripped: str, cfg: _Config, keep: "Optional[Pattern[str]]"
+) -> bool:
+    """Whether *stripped* passes the gate.  *keep* is the compiled cfg.keep.
+
+    It must be the very pattern the strip used, or the two sides disagree
+    about which comments were deletable.
+    """
     try:
         return bool(
             verify(
                 src,
                 stripped,
                 cfg.targets,
-                keep=cfg.keep,
+                keep=keep,
                 default_keeps=cfg.default_keeps,
             )
         )
@@ -349,7 +357,7 @@ def _process_one(cfg: _Config, path: str) -> Result:
         )
     if stripped == src:
         return Result(path, UNCHANGED, None, None, violations)
-    if not _verified(src, stripped, cfg):
+    if not _verified(src, stripped, cfg, keep):
         return Result(
             path,
             FAILED,
@@ -454,11 +462,12 @@ def _build_parser() -> argparse.ArgumentParser:
         prog="censor",
         description="Delete comments (and optionally docstrings) from Python "
         "code. Categories: own-line (a comment alone on its line), trailing "
-        "(after code on the same line), docstrings. Default selection: "
-        "--delete own-line trailing. Files are rewritten in place, "
-        "atomically, and only when the result "
-        "provably preserves the program; anything that cannot be proven safe "
-        "is left untouched and reported.",
+        "(after code on the same line), orphan-strings (a bare string "
+        "statement after an assignment — a docstring that is not one), "
+        "docstrings. Default selection: --delete own-line trailing "
+        "orphan-strings. Files are rewritten in place, atomically, and only "
+        "when the result provably preserves the program; anything that "
+        "cannot be proven safe is left untouched and reported.",
     )
     from censor import __version__
 

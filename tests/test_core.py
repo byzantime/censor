@@ -5,6 +5,7 @@ import pytest
 
 from censor import ALL_TARGETS
 from censor import DOCSTRINGS
+from censor import ORPHAN_STRINGS
 from censor import OWN_LINE
 from censor import TRAILING
 from censor import _cli
@@ -13,7 +14,7 @@ from censor import verify
 from censor._cli import main
 
 COMMENTS = frozenset({OWN_LINE, TRAILING})
-EVERYTHING = frozenset({OWN_LINE, TRAILING, DOCSTRINGS})
+COMMENTS_AND_DOCSTRINGS = frozenset({OWN_LINE, TRAILING, DOCSTRINGS})
 
 
 def strip(src, targets=ALL_TARGETS, **kw):
@@ -117,7 +118,7 @@ def test_docstrings_removed_everywhere():
         async def f():
             """Async docstring."""
         ''')
-    out = strip(src, EVERYTHING)
+    out = strip(src, COMMENTS_AND_DOCSTRINGS)
     assert '"""' not in out
     assert "# comment" not in out
     assert "class C:\n\n    def method(self):\n        return os" in out
@@ -125,14 +126,14 @@ def test_docstrings_removed_everywhere():
 
 
 def test_sole_docstring_module_gets_no_pass():
-    assert strip('"""Only a docstring."""\n', EVERYTHING) == ""
+    assert strip('"""Only a docstring."""\n', COMMENTS_AND_DOCSTRINGS) == ""
 
 
 def test_sole_docstring_class_and_def_get_pass():
     src = 'class C:\n    """Doc."""\n'
-    assert strip(src, EVERYTHING) == "class C:\n    pass\n"
+    assert strip(src, COMMENTS_AND_DOCSTRINGS) == "class C:\n    pass\n"
     src = 'def f():\n    """Doc.\n\n    More.\n    """\n'
-    assert strip(src, EVERYTHING) == "def f():\n    pass\n"
+    assert strip(src, COMMENTS_AND_DOCSTRINGS) == "def f():\n    pass\n"
 
 
 def test_docstrings_only_selection_leaves_comments():
@@ -144,47 +145,47 @@ def test_docstrings_only_selection_leaves_comments():
 
 def test_pass_line_keeps_crlf():
     src = 'def f():\r\n    """Doc."""\r\n'
-    assert strip(src, EVERYTHING) == "def f():\r\n    pass\r\n"
+    assert strip(src, COMMENTS_AND_DOCSTRINGS) == "def f():\r\n    pass\r\n"
 
 
 def test_docstring_end_line_with_trailing_comment_is_deleted():
     src = '"""doc"""\nx = 1\n'
-    assert strip(src, EVERYTHING) == "x = 1\n"
+    assert strip(src, COMMENTS_AND_DOCSTRINGS) == "x = 1\n"
     src = '"""doc"""#"\nx = 1\n'
-    out = strip(src, EVERYTHING)
-    assert verify(src, out, EVERYTHING)
-    assert strip(out, EVERYTHING) == out
+    out = strip(src, COMMENTS_AND_DOCSTRINGS)
+    assert verify(src, out, COMMENTS_AND_DOCSTRINGS)
+    assert strip(out, COMMENTS_AND_DOCSTRINGS) == out
 
 
 def test_docstring_sharing_a_line_with_code_is_kept():
     src = 'def f(): "doc"\n'
-    assert strip(src, EVERYTHING) == src
+    assert strip(src, COMMENTS_AND_DOCSTRINGS) == src
     src = 'def f():\n    "doc"; x = 1\n'
-    assert strip(src, EVERYTHING) == src
+    assert strip(src, COMMENTS_AND_DOCSTRINGS) == src
 
 
 def test_docstring_with_trailing_comment():
     src = 'def f():\n    """doc"""  # trailing\n    return 1\n'
     assert strip(src, {DOCSTRINGS}) == src
-    assert strip(src, EVERYTHING) == "def f():\n    return 1\n"
+    assert strip(src, COMMENTS_AND_DOCSTRINGS) == "def f():\n    return 1\n"
     assert strip(src, COMMENTS) == 'def f():\n    """doc"""\n    return 1\n'
 
 
 def test_docstring_with_kept_trailing_pragma_is_untouched():
     src = 'def f():\n    """doc"""  # noqa\n    return 1\n'
-    assert strip(src, EVERYTHING) == src
-    assert verify(src, src, EVERYTHING)
+    assert strip(src, COMMENTS_AND_DOCSTRINGS) == src
+    assert verify(src, src, COMMENTS_AND_DOCSTRINGS)
     kept = re.compile(r"KEEP")
     src2 = 'def f():\n    """doc"""  # KEEP\n    return 1\n'
-    assert strip_source(src2, EVERYTHING, keep=kept) == src2
-    assert verify(src2, src2, EVERYTHING, keep=kept)
+    assert strip_source(src2, COMMENTS_AND_DOCSTRINGS, keep=kept) == src2
+    assert verify(src2, src2, COMMENTS_AND_DOCSTRINGS, keep=kept)
 
 
 def test_docstring_trailing_comment_deleted_when_not_kept():
     src = 'def f():\n    """doc"""  # noqa\n'
-    out = strip_source(src, EVERYTHING, default_keeps=False)
+    out = strip_source(src, COMMENTS_AND_DOCSTRINGS, default_keeps=False)
     assert out == "def f():\n    pass\n"
-    assert verify(src, out, EVERYTHING, default_keeps=False)
+    assert verify(src, out, COMMENTS_AND_DOCSTRINGS, default_keeps=False)
 
 
 def test_docstrings_selection_keeps_comments():
@@ -194,12 +195,12 @@ def test_docstrings_selection_keeps_comments():
 
 def test_non_docstring_string_statement_untouched():
     src = 'x = 1\n"""just a string in the middle."""\ny = 2\n'
-    assert strip(src, EVERYTHING) == src
+    assert strip(src, COMMENTS_AND_DOCSTRINGS) == src
 
 
 def test_fstring_first_statement_is_not_a_docstring():
     src = 'f"""not a docstring {1}"""\nx = 1\n'
-    assert strip(src, EVERYTHING) == src
+    assert strip(src, COMMENTS_AND_DOCSTRINGS) == src
 
 
 SHEBANG_SRC = (
@@ -253,7 +254,7 @@ def test_keep_regex():
 def test_verify_rejects_code_deletion():
     src = "x = 1\ny = 2\n"
     assert not verify(src, "x = 1\n", {OWN_LINE})
-    assert not verify(src, "x = 1\n", EVERYTHING)
+    assert not verify(src, "x = 1\n", COMMENTS_AND_DOCSTRINGS)
 
 
 def test_verify_rejects_code_mutation():
@@ -274,7 +275,7 @@ def test_unknown_target_raises_value_error():
 
 def test_idempotent():
     src = SHEBANG_SRC + 'def f():\n    """doc"""\n    # inner\n    return 1\n'
-    for targets in (ALL_TARGETS, COMMENTS, EVERYTHING):
+    for targets in (ALL_TARGETS, COMMENTS, COMMENTS_AND_DOCSTRINGS):
         once = strip(src, targets)
         assert strip(once, targets) == once
 
@@ -597,7 +598,18 @@ def test_cli_empty_selection_errors(tmp_path, capsys):
     f = tmp_path / "a.py"
     f.write_text("x = 1\n")
     with pytest.raises(SystemExit) as exc:
-        main(["format", "--skip", "own-line", "--skip", "trailing", str(f)])
+        main(
+            [
+                "format",
+                "--skip",
+                "own-line",
+                "--skip",
+                "trailing",
+                "--skip",
+                "orphan-strings",
+                str(f),
+            ]
+        )
     assert exc.value.code == 2
     assert "nothing to delete" in capsys.readouterr().err
 
@@ -802,3 +814,249 @@ def test_cli_max_doc_lines_reports_and_exits_1(tmp_path, capsys):
 def test_cli_max_doc_lines_invalid_value_rejected(capsys):
     with pytest.raises(SystemExit):
         main(["--max-doc-lines", "0", "."])
+
+
+ORPHAN_GAMING_SRC = (
+    "ARCHIVE_RETIRING_STATUSES = frozenset({1, 2})\n"
+    '"""The statuses that end a task\'s need.\n'
+    "\n"
+    "Paragraph.\n"
+    '"""\n'
+    "_LEGACY_HOST_MODE = 'host'\n"
+)
+
+
+def test_strip_orphan_strings_removes_gaming_pattern():
+    assert strip(ORPHAN_GAMING_SRC, {ORPHAN_STRINGS}) == (
+        "ARCHIVE_RETIRING_STATUSES = frozenset({1, 2})\n"
+        "_LEGACY_HOST_MODE = 'host'\n"
+    )
+
+
+def test_strip_orphan_strings_selection_leaves_comments():
+    src = "# comment\nx = 1  # trailing\n"
+    assert strip(src, {ORPHAN_STRINGS}) == src
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        '"""Module docstring."""\nx = 1\n',
+        '"""standalone string"""\n',
+        'import os\n"""not orphan"""\n',
+        'class C:\n    pass\n"""not orphan"""\n',
+        'def f():\n    pass\n"""not orphan"""\n',
+        'x = 1\nf"""not orphan {1}"""\n',
+    ],
+)
+def test_strip_orphan_strings_needs_a_preceding_assignment(src):
+    assert strip(src, {ORPHAN_STRINGS}) == src
+
+
+def test_strip_orphan_strings_handles_annotated_assignment():
+    assert (
+        strip('x: int = 1\n"""orphan"""\n', {ORPHAN_STRINGS}) == "x: int = 1\n"
+    )
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        'x = 1; "orphan"\n',
+        'x = 1\n"orphan"; y = 2\n',
+        'x = 1\n"orphan"  # tail\n',
+    ],
+)
+def test_strip_orphan_strings_skips_shared_lines(src):
+    assert strip(src, {ORPHAN_STRINGS}) == src
+
+
+@pytest.mark.parametrize(
+    "src, expected",
+    [
+        (
+            'class C:\n    """doc."""\n    MAX = 1\n    """orphan"""\n',
+            'class C:\n    """doc."""\n    MAX = 1\n',
+        ),
+        (
+            'def f():\n    x = 1\n    """orphan"""\n    return x\n',
+            "def f():\n    x = 1\n    return x\n",
+        ),
+        (
+            'if True:\n    x = 1\n    """orphan"""\n',
+            "if True:\n    x = 1\n",
+        ),
+    ],
+)
+def test_strip_orphan_strings_reaches_nested_bodies(src, expected):
+    assert strip(src, {ORPHAN_STRINGS}) == expected
+
+
+def test_strip_orphan_strings_composes_with_docstrings():
+    src = (
+        '"""Module docstring."""\n'
+        "x = 1\n"
+        '"""orphan"""\n'
+        "def f():\n"
+        '    """docstring."""\n'
+    )
+    out = strip(src, {ORPHAN_STRINGS, DOCSTRINGS})
+    assert out == "x = 1\ndef f():\n    pass\n"
+
+
+def test_cli_orphan_strings_deleted_by_default(tmp_path):
+    f = tmp_path / "a.py"
+    f.write_text(ORPHAN_GAMING_SRC)
+    assert main(["format", str(f)]) == 0
+    result = f.read_text()
+    assert '"""' not in result
+    assert "ARCHIVE_RETIRING_STATUSES" in result
+    assert "_LEGACY_HOST_MODE" in result
+
+
+def test_cli_skip_orphan_strings_prevents_deletion(tmp_path):
+    f = tmp_path / "a.py"
+    src = 'x = 1\n"""orphan"""\n'
+    f.write_text(src)
+    assert main(["format", "--skip", "orphan-strings", str(f)]) == 0
+    assert f.read_text() == src
+
+
+def test_cli_explicit_delete_does_not_add_orphan_strings(tmp_path):
+    f = tmp_path / "a.py"
+    src = 'x = 1  # tail\n"""orphan"""\n'
+    f.write_text(src)
+    assert main(["format", "--delete", "trailing", str(f)]) == 0
+    assert f.read_text() == 'x = 1\n"""orphan"""\n'
+
+
+def test_cli_config_skip_orphan_strings(tmp_path):
+    (tmp_path / "pyproject.toml").write_text(
+        '[tool.censor]\nskip = ["orphan-strings"]\n'
+    )
+    f = tmp_path / "a.py"
+    src = 'x = 1\n"""orphan"""\n'
+    f.write_text(src)
+    assert main(["format", str(f)]) == 0
+    assert f.read_text() == src
+
+
+def test_cli_shared_line_orphan_does_not_fail_verification(tmp_path, capsys):
+    f = tmp_path / "a.py"
+    src = 'x = 1; "doc"\n'
+    f.write_text(src)
+    assert main(["format", str(f)]) == 0
+    assert f.read_text() == src
+    assert "verification failed" not in capsys.readouterr().err
+
+
+def test_cli_check_orphan_strings_reports_change(tmp_path, capsys):
+    f = tmp_path / "a.py"
+    f.write_text('x = 1\n"""orphan"""\n')
+    assert main(["check", str(f)]) == 1
+    assert "would strip" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    "src, expected",
+    [
+        ('x = 1\n"a"\n"b"\n"c"\n', "x = 1\n"),
+        ('X = 1\n"""a."""\n"""b."""\nY = 2\n', "X = 1\nY = 2\n"),
+        (
+            'def f():\n    x = 1\n    "a"\n    "b"\n    return x\n',
+            "def f():\n    x = 1\n    return x\n",
+        ),
+    ],
+)
+def test_strip_orphan_strings_takes_a_whole_run(src, expected):
+    out = strip(src, {ORPHAN_STRINGS})
+    assert out == expected
+    assert strip(out, {ORPHAN_STRINGS}) == out
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        'x = 1\n"a"; y = 2\n"b"\n',
+        'import os\n"a"\n"b"\n',
+        'x = 1\n"a"  # plain comment\n"b"\n',
+        'x = 1\n("a"  # inner\n "b")\n',
+    ],
+)
+def test_strip_orphan_strings_is_idempotent(src):
+    once = strip(src, ALL_TARGETS)
+    assert strip(once, ALL_TARGETS) == once
+
+
+def test_strip_orphan_string_and_its_trailing_comment_go_together():
+    src = 'x = 1\n"a"  # plain comment\n"b"\n'
+    assert strip(src, ALL_TARGETS) == "x = 1\n"
+
+
+PARENTHESISED_ORPHAN = 'x = 1\n("abc"  # inner\n "def")\ny = 2\n'
+BRACKETED_OWN_LINE = 'x = 1\n(\n    # own-line\n    "abc"\n)\ny = 2\n'
+
+
+@pytest.mark.parametrize(
+    "src", [PARENTHESISED_ORPHAN, BRACKETED_OWN_LINE]
+)
+def test_orphan_covering_a_surviving_comment_is_kept(src):
+    """Deletion is by whole lines, so it must not swallow a comment."""
+    assert strip(src, {ORPHAN_STRINGS}) == src
+
+
+@pytest.mark.parametrize("src", [PARENTHESISED_ORPHAN, BRACKETED_OWN_LINE])
+def test_orphan_covering_a_doomed_comment_goes_whole(src):
+    assert strip(src, ALL_TARGETS) == "x = 1\ny = 2\n"
+
+
+def test_orphan_covering_a_kept_pragma_is_kept():
+    src = 'x = 1\n("abc"  # noqa: E501\n "def")\ny = 2\n'
+    assert strip(src, ALL_TARGETS) == src
+
+
+def test_docstring_covering_a_surviving_comment_is_kept():
+    src = 'def f():\n    ("abc"  # inner\n     "def")\n    return 1\n'
+    assert strip(src, {DOCSTRINGS}) == src
+    assert strip(src, COMMENTS_AND_DOCSTRINGS) == "def f():\n    return 1\n"
+
+
+def test_cli_keep_pattern_reaches_the_verifier(tmp_path, capsys):
+    f = tmp_path / "a.py"
+    f.write_text('x = 1\n"""orphan"""\ny = 2  # drop\n# KEEP me\n')
+    assert main(["format", "--keep", "^# KEEP", str(f)]) == 0
+    assert f.read_text() == "x = 1\ny = 2\n# KEEP me\n"
+    assert "verification failed" not in capsys.readouterr().err
+
+
+NON_ASCII_ORPHAN = 'MAX = 1\n"这是一个说明字符串。"  # noqa: E501\ny = 2\n'
+
+
+def test_strip_orphan_strings_keeps_pragma_after_non_ascii_string():
+    assert strip(NON_ASCII_ORPHAN, ALL_TARGETS) == NON_ASCII_ORPHAN
+
+
+def test_strip_orphan_strings_keeps_code_after_non_ascii_string():
+    src = 'MAX = 1\n"最大允许的字节数量"; DANGER = 99\n'
+    assert strip(src, ALL_TARGETS) == src
+
+
+def test_strip_docstrings_keeps_code_after_non_ascii_docstring():
+    src = 'def f():\n    "最大允许的字节数量"; DANGER = 99\n'
+    assert strip(src, {DOCSTRINGS}) == src
+
+
+def test_strip_orphan_strings_deletes_non_ascii_orphan_on_its_own_line():
+    src = 'MAX = 1\n"这是一个说明字符串。"\ny = 2\n'
+    assert strip(src, ALL_TARGETS) == "MAX = 1\ny = 2\n"
+
+
+def test_verify_rejects_a_result_that_dropped_a_kept_comment():
+    src = 'MAX = 1\n"""orphan"""\ny = 2  # noqa: E501\n'
+    assert verify(src, "MAX = 1\ny = 2  # noqa: E501\n", ALL_TARGETS)
+    assert not verify(src, "MAX = 1\ny = 2\n", ALL_TARGETS)
+
+
+def test_verify_uses_tokens_when_no_string_was_removed():
+    src = "x = a" + ".b" * 5000 + "  # trailing\n"
+    assert strip(src, ALL_TARGETS) == "x = a" + ".b" * 5000 + "\n"
